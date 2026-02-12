@@ -5,9 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/AppSidebar";
-import { Menu } from "lucide-react";
 
 import LandingPage from "./pages/LandingPage";
 import AuthPage from "./pages/AuthPage";
@@ -59,6 +56,7 @@ const App = () => (
           {/* Protected routes */}
           <Route element={<AuthGuard />}>
             <Route path="/builder" element={<BuilderPage />} />
+            <Route path="/builder/:projectId" element={<BuilderPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/settings" element={<BrandSettingsPage />} />
           </Route>
