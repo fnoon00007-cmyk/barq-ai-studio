@@ -14,7 +14,105 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      brand_profiles: {
+        Row: {
+          brand_name: string | null
+          created_at: string
+          id: string
+          logo_url: string | null
+          primary_color: string | null
+          secondary_color: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          brand_name?: string | null
+          created_at?: string
+          id?: string
+          logo_url?: string | null
+          primary_color?: string | null
+          secondary_color?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          brand_name?: string | null
+          created_at?: string
+          id?: string
+          logo_url?: string | null
+          primary_color?: string | null
+          secondary_color?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          display_name: string | null
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      projects: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          preview_html: string | null
+          status: string | null
+          thumbnail_url: string | null
+          title: string
+          updated_at: string
+          user_id: string
+          vfs_data: Json | null
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          preview_html?: string | null
+          status?: string | null
+          thumbnail_url?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+          vfs_data?: Json | null
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          preview_html?: string | null
+          status?: string | null
+          thumbnail_url?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+          vfs_data?: Json | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
