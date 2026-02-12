@@ -25,22 +25,36 @@ const SYSTEM_PROMPT = `أنت "برق" ⚡ — مساعد سعودي ذكي وم
 - الجولة الثالثة: تأكيد وملخص قبل البناء ("تمام يا بطل، خلني ألخص لك اللي فهمته...").
 - إذا قال "يلا ابني" أو "ابدأ" بعد جولتين على الأقل، ابدأ البناء.
 
-### المرحلة الثانية: البناء
-- استخدم أداة generate_website فقط بعد ما تفهم المشروع كامل.
-- أنشئ ملفات متعددة منفصلة (Header.tsx, Hero.tsx, Services.tsx, Footer.tsx, App.tsx, styles.css).
-- كل component في ملف منفصل.
+### المرحلة الثانية: البناء (ملفات متعددة - مهم جداً!)
+عند البناء، لازم تنشئ **ملفات متعددة منفصلة** وليس ملف واحد:
 
-## قواعد البناء (عند استخدام الأداة):
+1. **Header.tsx** - الهيدر/النافبار العلوي مع الشعار والروابط
+2. **Hero.tsx** - القسم الرئيسي/البطل مع العنوان والوصف و CTA
+3. **Services.tsx** أو **Features.tsx** - قسم الخدمات أو المميزات
+4. **About.tsx** - قسم "من نحن" أو معلومات عن الشركة
+5. **Contact.tsx** - قسم التواصل (اختياري)
+6. **Footer.tsx** - الفوتر
+7. **App.tsx** - الملف الرئيسي الذي يجمع كل الأقسام (مهم! يجب أن يجمع كل شي)
+8. **styles.css** - ستايلات مخصصة إضافية
+
+**قواعد مهمة للملفات المتعددة:**
+- كل ملف component يحتوي فقط على HTML/JSX صافي - بدون function declarations أو export/import
+- App.tsx يجمع محتوى جميع الملفات في صفحة واحدة متكاملة
+- كل ملف يكون self-contained ويمكن فهمه بشكل مستقل
+- لا تكرر نفس المحتوى في أكثر من ملف
+
+## قواعد البناء:
 - كل المحتوى بالعربية (RTL) مع خط Cairo.
 - تصميم سعودي عصري يراعي الثقافة المحلية.
 - استخدم Tailwind CSS classes فقط.
-- أقسام أساسية: Header, Hero, Features/Services, About, Footer - كل واحد في ملف منفصل.
-- محتوى واقعي مناسب لنوع المشروع.
+- محتوى واقعي مناسب لنوع المشروع (أسماء عربية، عناوين سعودية، أرقام سعودية).
 - تصميم متجاوب (responsive).
 - لا تستخدم import أو require - كل شيء inline HTML مع Tailwind classes.
 - استخدم SVG inline للأيقونات.
-- App.tsx يجمع كل الأقسام مع بعض.
-- الكود لازم يكون HTML/JSX صافي بدون function declarations أو export statements.`;
+- الكود لازم يكون HTML/JSX صافي بدون function declarations أو export statements.
+- استخدم ألوان متناسقة ومناسبة لنوع المشروع.
+- أضف gradients وshadows لجعل التصميم حديث وجذاب.
+- اجعل الأقسام مرتبة ومتناسقة بارتفاعات مناسبة.`;
 
 function sseEvent(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -77,14 +91,14 @@ serve(async (req) => {
               function: {
                 name: "generate_website",
                 description:
-                  "استخدم هذه الأداة فقط عندما تكون جاهزاً لبناء الموقع بعد فهم المشروع",
+                  "استخدم هذه الأداة فقط عندما تكون جاهزاً لبناء الموقع بعد فهم المشروع. أنشئ ملفات متعددة منفصلة (Header.tsx, Hero.tsx, Services.tsx, Footer.tsx, App.tsx, styles.css).",
                 parameters: {
                   type: "object",
                   properties: {
                     thought_process: {
                       type: "array",
                       items: { type: "string" },
-                      description: "خطوات التفكير بالعربية",
+                      description: "خطوات التفكير بالعربية - اكتب 4-6 خطوات تفصيلية",
                     },
                     design_personality: {
                       type: "string",
@@ -95,15 +109,16 @@ serve(async (req) => {
                       items: {
                         type: "object",
                         properties: {
-                          path: { type: "string" },
+                          path: { type: "string", description: "اسم الملف مثل Header.tsx, Hero.tsx, App.tsx, styles.css" },
                           action: { type: "string", enum: ["create", "update"] },
-                          content: { type: "string" },
+                          content: { type: "string", description: "HTML/JSX صافي بدون function/export" },
                           language: { type: "string", enum: ["tsx", "css", "html"] },
                         },
                         required: ["path", "action", "content", "language"],
                       },
+                      description: "أنشئ على الأقل 5 ملفات: Header.tsx, Hero.tsx, Services.tsx, Footer.tsx, App.tsx, styles.css",
                     },
-                    user_message: { type: "string" },
+                    user_message: { type: "string", description: "رسالة نهائية للمستخدم تشرح ما تم بناؤه" },
                     css_variables: {
                       type: "object",
                       properties: {
@@ -132,14 +147,12 @@ serve(async (req) => {
       });
     }
 
-    // Stream SSE to client
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const reader = response.body!.getReader();
 
     const stream = new ReadableStream({
       async start(controller) {
-        let contentBuffer = "";
         let toolCallArgs = "";
         let isToolCall = false;
         let textBuffer = "";
@@ -167,7 +180,6 @@ serve(async (req) => {
               const delta = parsed.choices?.[0]?.delta;
               if (!delta) continue;
 
-              // Check for tool calls
               if (delta.tool_calls) {
                 isToolCall = true;
                 const tc = delta.tool_calls[0];
@@ -177,15 +189,12 @@ serve(async (req) => {
                 continue;
               }
 
-              // Regular content (conversation)
               if (delta.content) {
-                contentBuffer += delta.content;
                 controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: delta.content })));
               }
             }
           }
 
-          // After stream ends, process tool call if present
           if (isToolCall && toolCallArgs) {
             let result: any;
             try {
@@ -213,7 +222,6 @@ serve(async (req) => {
               }
             }
 
-            // Emit final message
             const msg = result.user_message || "تم بناء الموقع بنجاح! ⚡";
             controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: msg })));
           }

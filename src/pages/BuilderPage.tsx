@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen, FileCode, Save } from "lucide-react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -15,17 +15,23 @@ import {
 } from "@/components/ui/resizable";
 
 export default function BuilderPage() {
+  const { projectId } = useParams();
+  const [searchParams] = useSearchParams();
   const { files, addLogEntry, applyVFSOperations, activityLog } = useVFS();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [input, setInput] = useState("");
-  const [activeTab, setActiveTab] = useState<"chat" | "details">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "details" | "code">("chat");
   const [userId, setUserId] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [mobileView, setMobileView] = useState<"preview" | "chat">("chat");
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
+  const [projectTitle, setProjectTitle] = useState("مشروع جديد");
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId || null);
+  const [activeFile, setActiveFile] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const promptSentRef = useRef(false);
   const navigate = useNavigate();
 
   // Get user
@@ -35,30 +41,72 @@ export default function BuilderPage() {
     });
   }, []);
 
+  // Load project data if projectId exists
+  useEffect(() => {
+    if (!projectId) return;
+    setCurrentProjectId(projectId);
+    supabase
+      .from("projects")
+      .select("title, vfs_data")
+      .eq("id", projectId)
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          setProjectTitle(data.title || "مشروع جديد");
+          if (data.vfs_data && Array.isArray(data.vfs_data)) {
+            applyVFSOperations(
+              (data.vfs_data as any[]).map((f: any) => ({
+                path: f.name || f.path,
+                action: "create" as const,
+                content: f.content,
+                language: f.language || "tsx",
+              }))
+            );
+          }
+        }
+      });
+  }, [projectId]);
+
   // Load messages from DB
   useEffect(() => {
     if (!userId) return;
     setLoadingMessages(true);
-    supabase
+    const query = supabase
       .from("chat_messages")
       .select("*")
       .eq("user_id", userId)
-      .is("project_id", null)
-      .order("created_at", { ascending: true })
-      .then(({ data, error }) => {
-        if (!error && data) {
-          setMessages(
-            data.map((m: any) => ({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-              timestamp: new Date(m.created_at),
-            }))
-          );
-        }
-        setLoadingMessages(false);
-      });
-  }, [userId]);
+      .order("created_at", { ascending: true });
+
+    if (currentProjectId) {
+      query.eq("project_id", currentProjectId);
+    } else {
+      query.is("project_id", null);
+    }
+
+    query.then(({ data, error }) => {
+      if (!error && data) {
+        setMessages(
+          data.map((m: any) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            timestamp: new Date(m.created_at),
+          }))
+        );
+      }
+      setLoadingMessages(false);
+    });
+  }, [userId, currentProjectId]);
+
+  // Handle prompt from landing page
+  useEffect(() => {
+    if (promptSentRef.current) return;
+    const prompt = searchParams.get("prompt");
+    if (prompt && userId && !loadingMessages) {
+      promptSentRef.current = true;
+      handleSendMessage(prompt);
+    }
+  }, [searchParams, userId, loadingMessages]);
 
   // Auto scroll
   useEffect(() => {
@@ -68,16 +116,59 @@ export default function BuilderPage() {
   const saveMessage = useCallback(
     async (role: "user" | "assistant", content: string) => {
       if (!userId) return;
-      await supabase.from("chat_messages").insert({ user_id: userId, role, content });
+      await supabase.from("chat_messages").insert({
+        user_id: userId,
+        role,
+        content,
+        project_id: currentProjectId,
+      });
     },
-    [userId]
+    [userId, currentProjectId]
   );
+
+  // Save VFS to project
+  const saveProject = useCallback(async () => {
+    if (!userId || files.length === 0) return;
+
+    if (!currentProjectId) {
+      // Create new project
+      const { data, error } = await supabase
+        .from("projects")
+        .insert({
+          title: projectTitle,
+          user_id: userId,
+          status: "draft",
+          vfs_data: files as any,
+        })
+        .select("id")
+        .single();
+
+      if (!error && data) {
+        setCurrentProjectId(data.id);
+        navigate(`/builder/${data.id}`, { replace: true });
+        toast.success("تم حفظ المشروع ⚡");
+      }
+    } else {
+      // Update existing
+      await supabase
+        .from("projects")
+        .update({ vfs_data: files as any, updated_at: new Date().toISOString() })
+        .eq("id", currentProjectId);
+      toast.success("تم حفظ المشروع ⚡");
+    }
+  }, [userId, files, currentProjectId, projectTitle, navigate]);
 
   const clearMessages = useCallback(async () => {
     if (!userId) return;
     setMessages([]);
-    await supabase.from("chat_messages").delete().eq("user_id", userId).is("project_id", null);
-  }, [userId]);
+    const query = supabase.from("chat_messages").delete().eq("user_id", userId);
+    if (currentProjectId) {
+      query.eq("project_id", currentProjectId);
+    } else {
+      query.is("project_id", null);
+    }
+    await query;
+  }, [userId, currentProjectId]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -156,17 +247,18 @@ export default function BuilderPage() {
             onDone: () => {
               if (pendingOps.length > 0) {
                 applyVFSOperations(pendingOps);
-              }
-              updateAssistantMsg({ isStreaming: false });
-              // Switch to preview on mobile when done
-              if (pendingOps.length > 0) {
                 setMobileView("preview");
               }
+              updateAssistantMsg({ isStreaming: false });
             },
           },
           abortController.signal
         );
         saveMessage("assistant", assistantContent);
+        // Auto-save after generation
+        if (pendingOps.length > 0) {
+          setTimeout(() => saveProject(), 500);
+        }
       } catch (err: any) {
         if (err.name === "AbortError") return;
         console.error("Barq AI error:", err);
@@ -179,7 +271,7 @@ export default function BuilderPage() {
         abortControllerRef.current = null;
       }
     },
-    [messages, addLogEntry, applyVFSOperations, saveMessage]
+    [messages, addLogEntry, applyVFSOperations, saveMessage, saveProject]
   );
 
   const handleAbort = () => {
@@ -215,11 +307,20 @@ export default function BuilderPage() {
             <Zap className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <h1 className="text-sm font-bold text-foreground">برق AI</h1>
-            <p className="text-[11px] text-muted-foreground">مشروع جديد</p>
+            <h1 className="text-sm font-bold text-foreground">{projectTitle}</h1>
+            <p className="text-[11px] text-muted-foreground">برق AI</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {files.length > 0 && (
+            <button
+              onClick={saveProject}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+              title="حفظ المشروع"
+            >
+              <Save className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={() => navigate("/projects")}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
@@ -257,6 +358,20 @@ export default function BuilderPage() {
           محادثة
         </button>
         <button
+          onClick={() => setActiveTab("code")}
+          className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-1.5 ${
+            activeTab === "code"
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+          }`}
+        >
+          <FileCode className="h-3.5 w-3.5" />
+          الكود
+          {files.length > 0 && (
+            <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{files.length}</span>
+          )}
+        </button>
+        <button
           onClick={() => setActiveTab("details")}
           className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${
             activeTab === "details"
@@ -268,7 +383,7 @@ export default function BuilderPage() {
         </button>
       </div>
 
-      {/* Messages / Details */}
+      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {activeTab === "chat" ? (
           <div className="px-4 py-4 space-y-4">
@@ -345,6 +460,40 @@ export default function BuilderPage() {
 
             <div ref={messagesEndRef} />
           </div>
+        ) : activeTab === "code" ? (
+          <div className="flex flex-col h-full">
+            {files.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <FileCode className="h-12 w-12 text-muted-foreground/20 mb-4" />
+                <p className="text-sm text-muted-foreground">لم يتم إنشاء ملفات بعد</p>
+              </div>
+            ) : (
+              <>
+                {/* File tabs */}
+                <div className="flex items-center gap-1 px-3 py-2 overflow-x-auto border-b border-border">
+                  {files.map((f) => (
+                    <button
+                      key={f.name}
+                      onClick={() => setActiveFile(f.name)}
+                      className={`text-xs px-3 py-1.5 rounded-lg font-mono whitespace-nowrap transition-colors ${
+                        activeFile === f.name || (!activeFile && f.name === files[0]?.name)
+                          ? "bg-primary/15 text-primary border border-primary/30"
+                          : "text-muted-foreground hover:bg-secondary"
+                      }`}
+                    >
+                      {f.name}
+                    </button>
+                  ))}
+                </div>
+                {/* Code content */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  <pre className="text-xs leading-relaxed text-muted-foreground font-mono whitespace-pre-wrap" dir="ltr">
+                    {(files.find((f) => f.name === (activeFile || files[0]?.name)))?.content || ""}
+                  </pre>
+                </div>
+              </>
+            )}
+          </div>
         ) : (
           <div className="px-4 py-4 space-y-3">
             <div className="flex items-center gap-2 mb-3">
@@ -367,18 +516,6 @@ export default function BuilderPage() {
                 </div>
               ))
             )}
-            {files.length > 0 && (
-              <>
-                <div className="flex items-center gap-2 mt-5 mb-2">
-                  <h3 className="text-base font-bold text-foreground">الملفات ({files.length})</h3>
-                </div>
-                {files.map((f) => (
-                  <div key={f.name} className="text-sm px-3 py-2 rounded-lg bg-secondary text-muted-foreground font-mono" dir="ltr">
-                    {f.name}
-                  </div>
-                ))}
-              </>
-            )}
           </div>
         )}
       </div>
@@ -387,7 +524,7 @@ export default function BuilderPage() {
       <div className="border-t border-border p-4 shrink-0">
         <div className="flex items-end gap-2 bg-secondary rounded-2xl p-2.5 border border-border focus-within:border-primary/50 transition-colors">
           <button
-            onClick={() => { clearMessages(); }}
+            onClick={() => { clearMessages(); navigate("/builder"); }}
             className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shrink-0"
             title="محادثة جديدة"
           >
@@ -439,12 +576,17 @@ export default function BuilderPage() {
             </button>
           )}
           <div className="flex items-center gap-2 bg-secondary rounded-lg px-3 py-1.5 min-w-[200px]">
-            <div className="w-2 h-2 rounded-full bg-green-500" />
+            <div className={`w-2 h-2 rounded-full ${files.length > 0 ? "bg-green-500" : "bg-muted-foreground/30"}`} />
             <span className="text-xs text-muted-foreground font-mono truncate" dir="ltr">
-              barq-site.app
+              {projectTitle.replace(/\s/g, "-").toLowerCase()}.barq.app
             </span>
           </div>
         </div>
+        {files.length > 0 && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground">{files.length} ملفات</span>
+          </div>
+        )}
       </div>
 
       {/* Preview iframe */}
@@ -456,21 +598,18 @@ export default function BuilderPage() {
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
-      {/* Mobile: Toggle between chat and preview */}
+      {/* Mobile */}
       <div className="lg:hidden flex flex-col h-full">
-        {/* Mobile Header */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-card shrink-0">
           <div className="flex items-center gap-2">
             <Zap className="h-5 w-5 text-primary" />
-            <span className="text-sm font-bold text-foreground">برق AI</span>
+            <span className="text-sm font-bold text-foreground truncate max-w-[120px]">{projectTitle}</span>
           </div>
           <div className="flex items-center gap-1 bg-secondary rounded-lg p-0.5">
             <button
               onClick={() => setMobileView("chat")}
               className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${
-                mobileView === "chat"
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground"
+                mobileView === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
               }`}
             >
               محادثة
@@ -478,40 +617,32 @@ export default function BuilderPage() {
             <button
               onClick={() => setMobileView("preview")}
               className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${
-                mobileView === "preview"
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground"
+                mobileView === "preview" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
               }`}
             >
               معاينة
             </button>
           </div>
-          <button
-            onClick={handleLogout}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => navigate("/projects")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground">
+              <FolderOpen className="h-4 w-4" />
+            </button>
+          </div>
         </div>
-
-        {/* Mobile Content */}
         <div className="flex-1 overflow-hidden">
           {mobileView === "chat" ? chatPanel : previewPanel}
         </div>
       </div>
 
-      {/* Desktop: Split panel */}
+      {/* Desktop */}
       <div className="hidden lg:flex h-full">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Preview Panel (Left in RTL) */}
           <ResizablePanel defaultSize={chatPanelOpen ? 55 : 100} minSize={30}>
             {previewPanel}
           </ResizablePanel>
-
           {chatPanelOpen && (
             <>
               <ResizableHandle withHandle className="bg-border hover:bg-primary/30 transition-colors" />
-              {/* Chat Panel (Right in RTL) */}
               <ResizablePanel defaultSize={45} minSize={25} maxSize={60}>
                 {chatPanel}
               </ResizablePanel>
