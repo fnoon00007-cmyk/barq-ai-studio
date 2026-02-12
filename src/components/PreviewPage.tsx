@@ -8,17 +8,25 @@ interface PreviewPageProps {
 }
 
 function buildPreviewHTML(files: VFSFile[]): string | null {
-  const appFile = files.find((f) => f.name === "App.tsx");
+  // Find the main app file - could be "App.tsx", "src/App.tsx", or any .tsx file
+  const appFile = files.find((f) => f.name === "App.tsx") 
+    || files.find((f) => f.name.endsWith("App.tsx"))
+    || files.find((f) => f.language === "tsx" || f.language === "html");
   if (!appFile) return null;
 
   const cssFile = files.find((f) => f.language === "css");
   const cssContent = cssFile?.content || "";
 
   let jsxContent = appFile.content;
+  
+  // Strip function/export wrappers to get raw JSX
+  // Remove: export default function X() { return (...) }
   const returnMatch = jsxContent.match(/return\s*\(\s*([\s\S]*)\s*\)\s*;?\s*\}?\s*$/);
   if (returnMatch) {
     jsxContent = returnMatch[1];
   }
+  // Also strip any remaining import/export lines
+  jsxContent = jsxContent.replace(/^(import|export)\s+.*$/gm, '').trim();
 
   return `<!DOCTYPE html>
 <html lang="ar" dir="rtl">

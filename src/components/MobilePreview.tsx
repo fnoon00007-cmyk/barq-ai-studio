@@ -8,20 +8,20 @@ interface MobilePreviewProps {
 }
 
 function buildPreviewHTML(files: VFSFile[]): string | null {
-  const appFile = files.find((f) => f.name === "App.tsx");
+  const appFile = files.find((f) => f.name === "App.tsx")
+    || files.find((f) => f.name.endsWith("App.tsx"))
+    || files.find((f) => f.language === "tsx" || f.language === "html");
   if (!appFile) return null;
 
   const cssFile = files.find((f) => f.language === "css");
   const cssContent = cssFile?.content || "";
 
-  // Extract JSX content - strip export/import/function wrappers for simple rendering
   let jsxContent = appFile.content;
-  
-  // If it looks like a component, try to extract the JSX return
   const returnMatch = jsxContent.match(/return\s*\(\s*([\s\S]*)\s*\)\s*;?\s*\}?\s*$/);
   if (returnMatch) {
     jsxContent = returnMatch[1];
   }
+  jsxContent = jsxContent.replace(/^(import|export)\s+.*$/gm, '').trim();
 
   return `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -32,11 +32,7 @@ function buildPreviewHTML(files: VFSFile[]): string | null {
   <script src="https://cdn.tailwindcss.com"><\/script>
   <script>
     tailwindcss.config = {
-      theme: {
-        extend: {
-          fontFamily: { cairo: ['Cairo', 'sans-serif'] },
-        }
-      }
+      theme: { extend: { fontFamily: { cairo: ['Cairo', 'sans-serif'] } } }
     }
   <\/script>
   <style>
