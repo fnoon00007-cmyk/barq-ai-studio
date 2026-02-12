@@ -129,7 +129,7 @@ export function ChatSidebar({
       </div>
 
       {/* Thinking Engine */}
-      <ThinkingEngine steps={thinkingSteps} visible={isThinking} />
+      {isThinking && thinkingSteps.length > 0 && <ThinkingEngine steps={thinkingSteps} />}
 
       {/* Input */}
       <div className="p-4 border-t border-border">

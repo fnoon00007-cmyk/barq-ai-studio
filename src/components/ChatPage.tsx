@@ -110,7 +110,7 @@ export function ChatPage({
 
       {/* Thinking Engine */}
       <div className="max-w-2xl mx-auto w-full px-4">
-        <ThinkingEngine steps={thinkingSteps} visible={isThinking} />
+        {isThinking && thinkingSteps.length > 0 && <ThinkingEngine steps={thinkingSteps} />}
       </div>
 
       {/* Input */}

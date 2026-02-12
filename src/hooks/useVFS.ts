@@ -25,6 +25,8 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   thinkingSteps?: ThinkingStep[];
+  affectedFiles?: string[];
+  isStreaming?: boolean;
 }
 
 const typeLabels: Record<ActivityLogEntry["type"], string> = {

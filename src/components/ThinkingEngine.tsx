@@ -1,48 +1,57 @@
 import { ThinkingStep } from "@/hooks/useVFS";
-import { Zap, Check, Loader2, Circle } from "lucide-react";
+import { Zap, Check, Loader2, Circle, ChevronDown, FileCode } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useState } from "react";
 
 interface ThinkingEngineProps {
   steps: ThinkingStep[];
-  visible: boolean;
+  affectedFiles?: string[];
+  isComplete?: boolean;
 }
 
-export function ThinkingEngine({ steps, visible }: ThinkingEngineProps) {
-  if (!visible || steps.length === 0) return null;
+export function ThinkingEngine({ steps, affectedFiles, isComplete }: ThinkingEngineProps) {
+  const [open, setOpen] = useState(true);
+
+  if (steps.length === 0 && (!affectedFiles || affectedFiles.length === 0)) return null;
+
+  const allDone = isComplete || steps.every((s) => s.status === "completed");
 
   return (
-    <div className="mx-4 mb-3 rounded-lg border border-border bg-barq-surface p-4 animate-slide-up">
-      <div className="flex items-center gap-2 mb-3">
-        <Zap className="h-4 w-4 text-barq-gold animate-lightning" />
-        <span className="text-sm font-bold text-barq-gold">
-          برق يفكر ويخطط...
+    <Collapsible open={open} onOpenChange={setOpen} className="mt-2">
+      <CollapsibleTrigger className="flex items-center gap-2 text-xs w-full group">
+        <Zap className="h-3.5 w-3.5 text-accent shrink-0" />
+        <span className="font-bold text-accent">
+          {allDone ? "اكتمل التفكير والبناء" : "برق يفكر ويبني..."}
         </span>
-      </div>
-      <div className="space-y-2">
+        <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform mr-auto ${open ? "" : "-rotate-90"}`} />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-2 space-y-1.5">
         {steps.map((step) => (
-          <div key={step.id} className="flex items-center gap-3 text-sm">
-            {step.status === "completed" && (
-              <Check className="h-4 w-4 text-green-400 shrink-0" />
-            )}
-            {step.status === "loading" && (
-              <Loader2 className="h-4 w-4 text-barq-electric animate-spin shrink-0" />
-            )}
-            {step.status === "pending" && (
-              <Circle className="h-4 w-4 text-muted-foreground shrink-0" />
-            )}
-            <span
-              className={
-                step.status === "completed"
-                  ? "text-foreground"
-                  : step.status === "loading"
-                  ? "text-barq-electric"
-                  : "text-muted-foreground"
-              }
-            >
+          <div key={step.id} className="flex items-center gap-2 text-xs">
+            {step.status === "completed" && <Check className="h-3 w-3 text-green-400 shrink-0" />}
+            {step.status === "loading" && <Loader2 className="h-3 w-3 text-accent animate-spin shrink-0" />}
+            {step.status === "pending" && <Circle className="h-3 w-3 text-muted-foreground shrink-0" />}
+            <span className={step.status === "completed" ? "text-foreground" : step.status === "loading" ? "text-accent" : "text-muted-foreground"}>
               {step.label}
             </span>
           </div>
         ))}
-      </div>
-    </div>
+        {affectedFiles && affectedFiles.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-border">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+              <FileCode className="h-3 w-3" />
+              <span>الملفات المتأثرة ({affectedFiles.length})</span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {affectedFiles.map((f) => (
+                <span key={f} className="text-[10px] px-2 py-0.5 rounded bg-secondary text-muted-foreground font-mono" dir="ltr">
+                  {f}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
