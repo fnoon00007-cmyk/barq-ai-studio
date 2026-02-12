@@ -1,17 +1,16 @@
 import { useState, useCallback } from "react";
-import { ChatSidebar } from "@/components/ChatSidebar";
-import { MobilePreview } from "@/components/MobilePreview";
-import { ActivityLog } from "@/components/ActivityLog";
+import { ChatPage } from "@/components/ChatPage";
+import { PreviewPage } from "@/components/PreviewPage";
 import { useVFS, ChatMessage, ThinkingStep } from "@/hooks/useVFS";
 import { callBarqAI } from "@/lib/barq-api";
 import { toast } from "sonner";
 
 export default function Dashboard() {
-  const { files, activityLog, addLogEntry, applyVFSOperations } = useVFS();
+  const { files, addLogEntry, applyVFSOperations } = useVFS();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
-  const [activeFile, setActiveFile] = useState<string | null>(null);
+  const [view, setView] = useState<"chat" | "preview">("chat");
 
   const animateThinkingSteps = useCallback(async (steps: string[]) => {
     const mapped: ThinkingStep[] = steps.map((label, i) => ({
@@ -45,7 +44,6 @@ export default function Dashboard() {
       };
       setMessages((prev) => [...prev, userMsg]);
       setIsThinking(true);
-      addLogEntry("read", "تحليل طلب المستخدم...");
 
       const conversationHistory = [
         ...messages.map((m) => ({ role: m.role, content: m.content })),
@@ -55,31 +53,42 @@ export default function Dashboard() {
       try {
         const result = await callBarqAI(conversationHistory);
 
-        // Animate thinking steps from AI
-        if (result.thought_process?.length) {
-          await animateThinkingSteps(result.thought_process);
-        }
+        if (result.type === "conversation") {
+          // Conversational response - just add message
+          const assistantMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: result.message,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMsg]);
+        } else {
+          // Generation response - animate thinking + apply VFS
+          addLogEntry("read", "تحليل طلب المستخدم...");
 
-        // Apply VFS operations
-        if (result.vfs_operations?.length) {
-          applyVFSOperations(result.vfs_operations);
-          setActiveFile(result.vfs_operations[0].path);
-        }
+          if (result.thought_process?.length) {
+            await animateThinkingSteps(result.thought_process);
+          }
 
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: result.user_message || "تم بناء الموقع بنجاح! ⚡",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
+          if (result.vfs_operations?.length) {
+            applyVFSOperations(result.vfs_operations);
+          }
+
+          const assistantMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `${result.user_message || "تم بناء الموقع بنجاح!"} ⚡\n\nيمكنك الضغط على "معاينة الموقع" لرؤية النتيجة.`,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMsg]);
+        }
       } catch (err: any) {
         console.error("Barq AI error:", err);
         toast.error(err.message || "حدث خطأ أثناء التوليد");
         const errorMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى.`,
+          content: `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -90,43 +99,18 @@ export default function Dashboard() {
     [messages, addLogEntry, animateThinkingSteps, applyVFSOperations]
   );
 
+  if (view === "preview") {
+    return <PreviewPage files={files} onBack={() => setView("chat")} />;
+  }
+
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden">
-      {/* Right Panel - Preview */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <ActivityLog entries={activityLog} />
-
-        {/* File Tabs */}
-        {files.length > 0 && (
-          <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-card overflow-x-auto">
-            {files.map((file) => (
-              <button
-                key={file.name}
-                onClick={() => setActiveFile(file.name)}
-                className={`text-xs px-3 py-1.5 rounded-md font-mono transition-colors whitespace-nowrap ${
-                  activeFile === file.name
-                    ? "bg-barq-electric/15 text-barq-electric border border-barq-electric/30"
-                    : "text-muted-foreground hover:bg-barq-surface hover:text-secondary-foreground"
-                }`}
-              >
-                {file.name}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <MobilePreview files={files} activeFile={activeFile} />
-      </div>
-
-      {/* Left Panel - Chat */}
-      <div className="w-[420px] shrink-0">
-        <ChatSidebar
-          messages={messages}
-          onSendMessage={handleSendMessage}
-          isThinking={isThinking}
-          thinkingSteps={thinkingSteps}
-        />
-      </div>
-    </div>
+    <ChatPage
+      messages={messages}
+      onSendMessage={handleSendMessage}
+      isThinking={isThinking}
+      thinkingSteps={thinkingSteps}
+      hasPreview={files.length > 0}
+      onOpenPreview={() => setView("preview")}
+    />
   );
 }
