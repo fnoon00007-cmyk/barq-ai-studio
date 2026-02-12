@@ -5,7 +5,8 @@ export interface VFSOperation {
   language: "tsx" | "css" | "html";
 }
 
-export interface BarqAIResponse {
+export interface BarqGenerationResponse {
+  type: "generation";
   thought_process: string[];
   design_personality: "formal" | "creative" | "minimalist" | "bold";
   vfs_operations: VFSOperation[];
@@ -17,6 +18,13 @@ export interface BarqAIResponse {
     font_style?: string;
   };
 }
+
+export interface BarqConversationResponse {
+  type: "conversation";
+  message: string;
+}
+
+export type BarqAIResponse = BarqGenerationResponse | BarqConversationResponse;
 
 export async function callBarqAI(
   messages: { role: string; content: string }[]
