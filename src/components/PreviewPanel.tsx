@@ -1,5 +1,5 @@
 import { VFSFile } from "@/hooks/useVFS";
-import { Globe, Smartphone } from "lucide-react";
+import { Globe } from "lucide-react";
 import { useMemo } from "react";
 
 interface PreviewPanelProps {
@@ -48,11 +48,11 @@ export function PreviewPanel({ files }: PreviewPanelProps) {
   if (!previewHTML) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
-        <div className="w-20 h-20 rounded-2xl bg-secondary border border-border flex items-center justify-center mb-4">
-          <Globe className="h-10 w-10 text-muted-foreground/20" />
+        <div className="w-20 h-20 rounded-2xl bg-secondary border border-border flex items-center justify-center mb-6">
+          <Globe className="h-10 w-10 text-muted-foreground/30" />
         </div>
-        <h2 className="text-lg font-bold text-foreground mb-2">معاينة الموقع</h2>
-        <p className="text-sm text-muted-foreground max-w-xs">
+        <h2 className="text-xl font-bold text-foreground mb-2">معاينة الموقع</h2>
+        <p className="text-base text-muted-foreground max-w-sm">
           ابدأ محادثة مع برق وسيظهر الموقع هنا مباشرة ⚡
         </p>
       </div>
@@ -60,24 +60,11 @@ export function PreviewPanel({ files }: PreviewPanelProps) {
   }
 
   return (
-    <div className="h-full flex items-center justify-center p-4 pb-8">
-      {/* Phone Frame */}
-      <div className="relative mx-auto w-full max-w-[360px] aspect-[9/18] rounded-[2.5rem] border-4 border-border bg-background shadow-2xl overflow-hidden">
-        <div className="absolute top-0 inset-x-0 flex justify-center z-10">
-          <div className="w-28 h-5 bg-border rounded-b-xl" />
-        </div>
-        <div className="h-full pt-6 pb-3 px-0.5 overflow-hidden">
-          <iframe
-            srcDoc={previewHTML}
-            className="w-full h-full rounded-2xl border-0"
-            sandbox="allow-scripts"
-            title="معاينة الموقع"
-          />
-        </div>
-        <div className="absolute bottom-1.5 inset-x-0 flex justify-center">
-          <div className="w-24 h-1 rounded-full bg-border" />
-        </div>
-      </div>
-    </div>
+    <iframe
+      srcDoc={previewHTML}
+      className="w-full h-full border-0"
+      sandbox="allow-scripts"
+      title="معاينة الموقع"
+    />
   );
 }
