@@ -27,20 +27,24 @@ const SYSTEM_PROMPT = `أنت "برق" ⚡ — مساعد سعودي ذكي وم
 
 ### المرحلة الثانية: البناء
 - استخدم أداة generate_website فقط بعد ما تفهم المشروع كامل.
-- لازم ملف واحد اسمه بالضبط "App.tsx" يحتوي كامل الموقع.
-- ممكن تضيف ملف CSS إضافي.
+- أنشئ ملفات متعددة منفصلة (Header.tsx, Hero.tsx, Services.tsx, Footer.tsx, App.tsx, styles.css).
+- كل component في ملف منفصل.
 
 ## قواعد البناء (عند استخدام الأداة):
 - كل المحتوى بالعربية (RTL) مع خط Cairo.
 - تصميم سعودي عصري يراعي الثقافة المحلية.
 - استخدم Tailwind CSS classes فقط.
-- أقسام أساسية: Header, Hero, Features/Services, About, Footer.
+- أقسام أساسية: Header, Hero, Features/Services, About, Footer - كل واحد في ملف منفصل.
 - محتوى واقعي مناسب لنوع المشروع.
 - تصميم متجاوب (responsive).
 - لا تستخدم import أو require - كل شيء inline HTML مع Tailwind classes.
 - استخدم SVG inline للأيقونات.
-- المسار (path) في vfs_operations لازم يكون "App.tsx" للملف الرئيسي.
+- App.tsx يجمع كل الأقسام مع بعض.
 - الكود لازم يكون HTML/JSX صافي بدون function declarations أو export statements.`;
+
+function sseEvent(data: Record<string, unknown>): string {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -66,6 +70,7 @@ serve(async (req) => {
             { role: "system", content: SYSTEM_PROMPT },
             ...messages,
           ],
+          stream: true,
           tools: [
             {
               type: "function",
@@ -120,60 +125,118 @@ serve(async (req) => {
 
     if (!response.ok) {
       const status = response.status;
-      if (status === 429) {
-        return new Response(
-          JSON.stringify({ error: "تم تجاوز الحد المسموح، حاول لاحقاً." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (status === 402) {
-        return new Response(
-          JSON.stringify({ error: "يرجى إضافة رصيد لحسابك." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      const errText = await response.text();
-      console.error("AI gateway error:", status, errText);
-      return new Response(
-        JSON.stringify({ error: "حدث خطأ في الاتصال بالذكاء الاصطناعي" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      const errBody = { error: status === 429 ? "تم تجاوز الحد المسموح، حاول لاحقاً." : status === 402 ? "يرجى إضافة رصيد لحسابك." : "حدث خطأ في الاتصال بالذكاء الاصطناعي" };
+      return new Response(JSON.stringify(errBody), {
+        status: status >= 400 && status < 500 ? status : 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    const data = await response.json();
-    const choice = data.choices?.[0]?.message;
+    // Stream SSE to client
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const reader = response.body!.getReader();
 
-    // Case 1: AI chose to use tool (generate website)
-    if (choice?.tool_calls?.[0]) {
-      const toolCall = choice.tool_calls[0];
-      let result;
-      try {
-        result = JSON.parse(toolCall.function.arguments);
-      } catch {
-        return new Response(
-          JSON.stringify({ error: "خطأ في تحليل رد الذكاء الاصطناعي" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    const stream = new ReadableStream({
+      async start(controller) {
+        let contentBuffer = "";
+        let toolCallArgs = "";
+        let isToolCall = false;
+        let textBuffer = "";
 
-      if (!result.vfs_operations || !Array.isArray(result.vfs_operations)) {
-        return new Response(
-          JSON.stringify({ error: "رد غير صالح" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-      return new Response(
-        JSON.stringify({ type: "generation", ...result }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+            textBuffer += decoder.decode(value, { stream: true });
 
-    // Case 2: AI responded with text (conversational)
-    return new Response(
-      JSON.stringify({ type: "conversation", message: choice?.content || "" }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+            let newlineIdx: number;
+            while ((newlineIdx = textBuffer.indexOf("\n")) !== -1) {
+              let line = textBuffer.slice(0, newlineIdx);
+              textBuffer = textBuffer.slice(newlineIdx + 1);
+              if (line.endsWith("\r")) line = line.slice(0, -1);
+              if (!line.startsWith("data: ")) continue;
+
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr === "[DONE]") continue;
+
+              let parsed: any;
+              try { parsed = JSON.parse(jsonStr); } catch { continue; }
+
+              const delta = parsed.choices?.[0]?.delta;
+              if (!delta) continue;
+
+              // Check for tool calls
+              if (delta.tool_calls) {
+                isToolCall = true;
+                const tc = delta.tool_calls[0];
+                if (tc?.function?.arguments) {
+                  toolCallArgs += tc.function.arguments;
+                }
+                continue;
+              }
+
+              // Regular content (conversation)
+              if (delta.content) {
+                contentBuffer += delta.content;
+                controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: delta.content })));
+              }
+            }
+          }
+
+          // After stream ends, process tool call if present
+          if (isToolCall && toolCallArgs) {
+            let result: any;
+            try {
+              result = JSON.parse(toolCallArgs);
+            } catch {
+              controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: "عذراً، حدث خطأ في معالجة الرد. حاول مرة ثانية." })));
+              controller.enqueue(encoder.encode(sseEvent({ event: "done" })));
+              controller.close();
+              return;
+            }
+
+            // Emit thinking steps
+            if (result.thought_process?.length) {
+              controller.enqueue(encoder.encode(sseEvent({ event: "thinking_start" })));
+              for (const step of result.thought_process) {
+                controller.enqueue(encoder.encode(sseEvent({ event: "thinking_step", step })));
+              }
+            }
+
+            // Emit file operations
+            if (result.vfs_operations?.length) {
+              for (const op of result.vfs_operations) {
+                controller.enqueue(encoder.encode(sseEvent({ event: "file_start", path: op.path, action: op.action, language: op.language })));
+                controller.enqueue(encoder.encode(sseEvent({ event: "file_done", path: op.path, content: op.content })));
+              }
+            }
+
+            // Emit final message
+            const msg = result.user_message || "تم بناء الموقع بنجاح! ⚡";
+            controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: msg })));
+          }
+
+          controller.enqueue(encoder.encode(sseEvent({ event: "done" })));
+        } catch (e) {
+          console.error("Stream processing error:", e);
+          controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: "حدث خطأ أثناء المعالجة" })));
+          controller.enqueue(encoder.encode(sseEvent({ event: "done" })));
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
   } catch (e) {
     console.error("barq-chat error:", e);
     return new Response(

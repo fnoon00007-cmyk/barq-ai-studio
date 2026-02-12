@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { ChatMessage, ThinkingStep } from "@/hooks/useVFS";
 import { useVFS } from "@/hooks/useVFS";
-import { callBarqAI } from "@/lib/barq-api";
+import { streamBarqAI } from "@/lib/barq-api";
 import { toast } from "sonner";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/PreviewPanel";
@@ -12,13 +12,13 @@ export default function BuilderPage() {
   const { files, addLogEntry, applyVFSOperations, activityLog } = useVFS();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
-  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
   const [input, setInput] = useState("");
   const [activeTab, setActiveTab] = useState<"chat" | "details">("chat");
   const [chatOpen, setChatOpen] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Get user
   useEffect(() => {
@@ -71,27 +71,6 @@ export default function BuilderPage() {
     await supabase.from("chat_messages").delete().eq("user_id", userId).is("project_id", null);
   }, [userId]);
 
-  const animateThinkingSteps = useCallback(async (steps: string[]) => {
-    const mapped: ThinkingStep[] = steps.map((label, i) => ({
-      id: String(i),
-      label,
-      status: "pending" as const,
-    }));
-    setThinkingSteps(mapped);
-    for (let i = 0; i < mapped.length; i++) {
-      await new Promise((r) => setTimeout(r, 300));
-      setThinkingSteps((prev) =>
-        prev.map((s, idx) =>
-          idx === i ? { ...s, status: "loading" } : idx < i ? { ...s, status: "completed" } : s
-        )
-      );
-      await new Promise((r) => setTimeout(r, 400));
-      setThinkingSteps((prev) =>
-        prev.map((s, idx) => (idx <= i ? { ...s, status: "completed" } : s))
-      );
-    }
-  }, []);
-
   const handleSendMessage = useCallback(
     async (content: string) => {
       const userMsg: ChatMessage = {
@@ -111,37 +90,94 @@ export default function BuilderPage() {
         { role: "user", content },
       ];
 
+      const assistantMsgId = crypto.randomUUID();
+      let assistantContent = "";
+      const thinkingSteps: ThinkingStep[] = [];
+      const affectedFiles: string[] = [];
+      const pendingOps: { path: string; action: "create" | "update"; content: string; language: string }[] = [];
+
+      // Create streaming assistant message
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantMsgId,
+          role: "assistant",
+          content: "",
+          timestamp: new Date(),
+          isStreaming: true,
+          thinkingSteps: [],
+          affectedFiles: [],
+        },
+      ]);
+
+      const updateAssistantMsg = (updates: Partial<ChatMessage>) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantMsgId ? { ...m, ...updates } : m))
+        );
+      };
+
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
       try {
-        const result = await callBarqAI(conversationHistory);
-        let assistantContent = "";
-        if (result.type === "conversation") {
-          assistantContent = result.message;
-        } else {
-          addLogEntry("read", "تحليل طلب المستخدم...");
-          if (result.thought_process?.length) await animateThinkingSteps(result.thought_process);
-          if (result.vfs_operations?.length) applyVFSOperations(result.vfs_operations);
-          assistantContent = `${result.user_message || "تم بناء الموقع بنجاح!"} ⚡`;
-        }
-        setMessages((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), role: "assistant", content: assistantContent, timestamp: new Date() },
-        ]);
+        await streamBarqAI(
+          conversationHistory,
+          {
+            onThinkingStart: () => {
+              addLogEntry("read", "تحليل طلب المستخدم...");
+            },
+            onThinkingStep: (step) => {
+              const newStep: ThinkingStep = {
+                id: String(thinkingSteps.length),
+                label: step,
+                status: "completed",
+              };
+              thinkingSteps.push(newStep);
+              updateAssistantMsg({ thinkingSteps: [...thinkingSteps] });
+            },
+            onFileStart: (path, action) => {
+              addLogEntry(action === "create" ? "create" : "update", `${action === "create" ? "إنشاء" : "تحديث"} ${path}...`);
+              if (!affectedFiles.includes(path)) affectedFiles.push(path);
+              updateAssistantMsg({ affectedFiles: [...affectedFiles] });
+            },
+            onFileDone: (path, fileContent) => {
+              pendingOps.push({ path, action: "create", content: fileContent, language: path.endsWith(".css") ? "css" : "tsx" });
+            },
+            onMessageDelta: (text) => {
+              assistantContent += text;
+              updateAssistantMsg({ content: assistantContent });
+            },
+            onDone: () => {
+              // Apply all file operations at once
+              if (pendingOps.length > 0) {
+                applyVFSOperations(pendingOps);
+              }
+              updateAssistantMsg({ isStreaming: false });
+            },
+          },
+          abortController.signal
+        );
+
         saveMessage("assistant", assistantContent);
       } catch (err: any) {
+        if (err.name === "AbortError") return;
         console.error("Barq AI error:", err);
         toast.error(err.message || "حدث خطأ أثناء التوليد");
-        const errMsg = `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`;
-        setMessages((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), role: "assistant", content: errMsg, timestamp: new Date() },
-        ]);
-        saveMessage("assistant", errMsg);
+        const errContent = `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`;
+        updateAssistantMsg({ content: errContent, isStreaming: false });
+        saveMessage("assistant", errContent);
       } finally {
         setIsThinking(false);
+        abortControllerRef.current = null;
       }
     },
-    [messages, addLogEntry, animateThinkingSteps, applyVFSOperations, saveMessage]
+    [messages, addLogEntry, applyVFSOperations, saveMessage]
   );
+
+  const handleAbort = () => {
+    abortControllerRef.current?.abort();
+    setIsThinking(false);
+  };
 
   const handleSubmit = () => {
     if (!input.trim() || isThinking) return;
@@ -235,14 +271,31 @@ export default function BuilderPage() {
                       <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-primary/20" : "bg-accent/20"}`}>
                         {msg.role === "user" ? <User className="h-3.5 w-3.5 text-primary" /> : <Bot className="h-3.5 w-3.5 text-accent" />}
                       </div>
-                      <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${msg.role === "user" ? "bg-primary/15 text-foreground" : "bg-secondary text-secondary-foreground"}`}>
-                        {msg.content}
+                      <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${msg.role === "user" ? "bg-primary/15 text-foreground" : "bg-secondary text-secondary-foreground"}`}>
+                        <div className="whitespace-pre-wrap">
+                          {msg.content}
+                          {msg.isStreaming && !msg.content && (
+                            <span className="inline-flex gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-1" />
+                              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-2" />
+                              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-3" />
+                            </span>
+                          )}
+                        </div>
+                        {/* Inline Thinking Engine */}
+                        {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length) ? (
+                          <ThinkingEngine
+                            steps={msg.thinkingSteps || []}
+                            affectedFiles={msg.affectedFiles}
+                            isComplete={!msg.isStreaming}
+                          />
+                        ) : null}
                       </div>
                     </div>
                   </div>
                 ))}
 
-                {isThinking && (
+                {isThinking && !messages.some((m) => m.isStreaming) && (
                   <div className="flex gap-2 animate-slide-up">
                     <div className="w-7 h-7 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
                       <Bot className="h-3.5 w-3.5 text-accent" />
@@ -255,7 +308,6 @@ export default function BuilderPage() {
                   </div>
                 )}
 
-                <ThinkingEngine steps={thinkingSteps} visible={isThinking} />
                 <div ref={messagesEndRef} />
               </div>
             ) : (
@@ -298,9 +350,8 @@ export default function BuilderPage() {
         </div>
       )}
 
-      {/* Bottom Fixed Bar - Input + Tabs (Lovable style) */}
+      {/* Bottom Fixed Bar - Input */}
       <div className="border-t border-border bg-card z-40">
-        {/* Input Row */}
         <div className="px-3 sm:px-4 pt-3 pb-2">
           <div className="flex items-end gap-2 bg-secondary rounded-2xl p-2 border border-border focus-within:border-primary/50 transition-colors">
             <textarea
@@ -314,7 +365,10 @@ export default function BuilderPage() {
               disabled={isThinking}
             />
             {isThinking ? (
-              <button className="w-9 h-9 rounded-xl bg-destructive text-destructive-foreground flex items-center justify-center shrink-0">
+              <button
+                onClick={handleAbort}
+                className="w-9 h-9 rounded-xl bg-destructive text-destructive-foreground flex items-center justify-center shrink-0"
+              >
                 <div className="w-3 h-3 rounded-sm bg-destructive-foreground" />
               </button>
             ) : (
