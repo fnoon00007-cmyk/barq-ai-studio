@@ -248,7 +248,14 @@ export default function BuilderPage() {
             onDone: () => {
               if (pendingOps.length > 0) {
                 applyVFSOperations(pendingOps);
-                setMobileView("preview");
+                toast("المعاينة جاهزة! ⚡", {
+                  description: "تم بناء موقعك بنجاح",
+                  action: {
+                    label: "انتقل للمعاينة",
+                    onClick: () => setMobileView("preview"),
+                  },
+                  duration: 10000,
+                });
               }
               updateAssistantMsg({ isStreaming: false });
             },
