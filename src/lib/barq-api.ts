@@ -11,34 +11,18 @@ export interface StreamCallbacks {
   onFileStart?: (path: string, action: string) => void;
   onFileDone?: (path: string, content: string) => void;
   onMessageDelta?: (text: string) => void;
+  onBuildReady?: (buildPrompt: string, summary: string, projectName: string) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
 }
 
-const STREAM_TIMEOUT_MS = 45_000; // 45 seconds max silence before timeout
+const STREAM_TIMEOUT_MS = 45_000;
 
-export async function streamBarqAI(
-  messages: { role: string; content: string }[],
+async function processSSEStream(
+  resp: Response,
   callbacks: StreamCallbacks,
   signal?: AbortSignal
 ): Promise<void> {
-  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-    },
-    body: JSON.stringify({ messages }),
-    signal,
-  });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: "فشل الاتصال" }));
-    throw new Error(err.error || `HTTP ${resp.status}`);
-  }
-
   if (!resp.body) throw new Error("No response body");
 
   const reader = resp.body.getReader();
@@ -46,7 +30,6 @@ export async function streamBarqAI(
   let textBuffer = "";
   let lastActivity = Date.now();
 
-  // Timeout checker
   const timeoutCheck = setInterval(() => {
     if (Date.now() - lastActivity > STREAM_TIMEOUT_MS) {
       clearInterval(timeoutCheck);
@@ -96,12 +79,14 @@ export async function streamBarqAI(
             case "message_delta":
               callbacks.onMessageDelta?.(parsed.content);
               break;
+            case "build_ready":
+              callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name);
+              break;
             case "done":
               callbacks.onDone?.();
               return;
           }
         } catch {
-          // Incomplete JSON line - skip it instead of re-buffering (prevents hang)
           console.warn("Skipped unparseable SSE line:", jsonStr.slice(0, 100));
         }
       }
@@ -118,6 +103,7 @@ export async function streamBarqAI(
         try {
           const parsed = JSON.parse(jsonStr);
           if (parsed.event === "message_delta") callbacks.onMessageDelta?.(parsed.content);
+          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name);
           if (parsed.event === "done") {
             callbacks.onDone?.();
             return;
@@ -132,4 +118,65 @@ export async function streamBarqAI(
   } finally {
     clearInterval(timeoutCheck);
   }
+}
+
+/** Stream conversation with the Gemini planner */
+export async function streamBarqPlanner(
+  messages: { role: string; content: string }[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-planner`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({ messages }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: "فشل الاتصال" }));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+
+  await processSSEStream(resp, callbacks, signal);
+}
+
+/** Stream build execution with Groq builder */
+export async function streamBarqBuilder(
+  buildPrompt: string,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({ build_prompt: buildPrompt }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: "فشل الاتصال" }));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+
+  await processSSEStream(resp, callbacks, signal);
+}
+
+/** @deprecated Use streamBarqPlanner + streamBarqBuilder instead */
+export async function streamBarqAI(
+  messages: { role: string; content: string }[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  return streamBarqPlanner(messages, callbacks, signal);
 }
