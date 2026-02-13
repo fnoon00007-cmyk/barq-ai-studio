@@ -29,8 +29,12 @@ function buildPreviewHTML(files: VFSFile[]): string | null {
     let replacedAny = false;
     for (const comp of componentFiles) {
       const baseName = comp.name.replace(/\.(tsx|jsx|html)$/, "");
-      // Match patterns like: <!-- Header --> , {/* Header.tsx */}, {/* Header */}, <!-- Header.tsx -->
+      // Match patterns like:
+      // <!-- Header --> , {/* Header.tsx */}, {/* Header */}, <!-- Header.tsx -->
+      // <Header />, <Header></Header>, <Header/>
       const patterns = [
+        new RegExp(`<${baseName}\\s*/\\s*>`, "gi"),
+        new RegExp(`<${baseName}\\s*>\\s*</${baseName}\\s*>`, "gi"),
         new RegExp(`<!--\\s*${baseName}(\\.tsx)?\\s*-->`, "gi"),
         new RegExp(`\\{/\\*\\s*${baseName}(\\.tsx)?\\s*(محتوى|يُدرج هنا|content)?[^*]*\\*/\\}`, "gi"),
         new RegExp(`<!--\\s*${baseName}(\\.tsx)?\\s*(محتوى|يُدرج هنا|section)?[^-]*-->`, "gi"),
@@ -39,6 +43,8 @@ function buildPreviewHTML(files: VFSFile[]): string | null {
       const compContent = cleanJSX(comp.content);
       for (const pattern of patterns) {
         if (pattern.test(appContent)) {
+          // Reset lastIndex since we used .test()
+          pattern.lastIndex = 0;
           appContent = appContent.replace(pattern, compContent);
           replacedAny = true;
           break;
