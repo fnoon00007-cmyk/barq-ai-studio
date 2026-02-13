@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { ChatMessage, ThinkingStep } from "@/hooks/useVFS";
 import { useVFS } from "@/hooks/useVFS";
-import { streamBarqAI } from "@/lib/barq-api";
+import { streamBarqPlanner, streamBarqBuilder } from "@/lib/barq-api";
 import { toast } from "sonner";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/PreviewPanel";
@@ -30,6 +30,9 @@ export default function BuilderPage() {
   const [projectTitle, setProjectTitle] = useState("مشروع جديد");
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId || null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  const [buildPrompt, setBuildPrompt] = useState<string | null>(null);
+  const [buildProjectName, setBuildProjectName] = useState<string | null>(null);
+  const [isBuilding, setIsBuilding] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const promptSentRef = useRef(false);
@@ -171,23 +174,13 @@ export default function BuilderPage() {
     await query;
   }, [userId, currentProjectId]);
 
-  const handleSendMessage = useCallback(
-    async (content: string) => {
-      const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, userMsg]);
-      saveMessage("user", content);
+  // Handle build execution (called when user clicks "ابدأ البناء")
+  const handleStartBuild = useCallback(
+    async (prompt: string) => {
+      if (isBuilding) return;
+      setIsBuilding(true);
       setIsThinking(true);
-      setActiveTab("chat");
-
-      const conversationHistory = [
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
-        { role: "user", content },
-      ];
+      setBuildPrompt(null);
 
       const assistantMsgId = crypto.randomUUID();
       let assistantContent = "";
@@ -200,7 +193,7 @@ export default function BuilderPage() {
         {
           id: assistantMsgId,
           role: "assistant",
-          content: "",
+          content: "جاري بناء موقعك... ⚡",
           timestamp: new Date(),
           isStreaming: true,
           thinkingSteps: [],
@@ -216,26 +209,18 @@ export default function BuilderPage() {
 
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
-
-      // Safety timeout: if stream hangs for 50s total, abort
       const safetyTimeout = setTimeout(() => {
         abortController.abort();
-        toast.error("انتهت مهلة الاتصال، حاول مرة أخرى");
-      }, 50_000);
+        toast.error("انتهت مهلة البناء، حاول مرة أخرى");
+      }, 120_000); // 2 minutes for build
 
       try {
-        await streamBarqAI(
-          conversationHistory,
+        await streamBarqBuilder(
+          prompt,
           {
-            onThinkingStart: () => {
-              addLogEntry("read", "تحليل طلب المستخدم...");
-            },
+            onThinkingStart: () => addLogEntry("read", "تحليل وتخطيط البناء..."),
             onThinkingStep: (step) => {
-              const newStep: ThinkingStep = {
-                id: String(thinkingSteps.length),
-                label: step,
-                status: "completed",
-              };
+              const newStep: ThinkingStep = { id: String(thinkingSteps.length), label: step, status: "completed" };
               thinkingSteps.push(newStep);
               updateAssistantMsg({ thinkingSteps: [...thinkingSteps] });
             },
@@ -256,10 +241,7 @@ export default function BuilderPage() {
                 applyVFSOperations(pendingOps);
                 toast("المعاينة جاهزة! ⚡", {
                   description: "تم بناء موقعك بنجاح",
-                  action: {
-                    label: "انتقل للمعاينة",
-                    onClick: () => setMobileView("preview"),
-                  },
+                  action: { label: "انتقل للمعاينة", onClick: () => setMobileView("preview") },
                   duration: 10000,
                 });
               }
@@ -269,12 +251,9 @@ export default function BuilderPage() {
           abortController.signal
         );
         saveMessage("assistant", assistantContent);
-        if (pendingOps.length > 0) {
-          setTimeout(() => saveProject(), 500);
-        }
+        if (pendingOps.length > 0) setTimeout(() => saveProject(), 500);
       } catch (err: any) {
         if (err.name === "AbortError") {
-          // If we have partial content, still save & show it
           if (assistantContent) {
             updateAssistantMsg({ isStreaming: false });
             saveMessage("assistant", assistantContent);
@@ -282,8 +261,100 @@ export default function BuilderPage() {
             updateAssistantMsg({ content: "انقطع الاتصال، حاول مرة أخرى ⚡", isStreaming: false });
           }
         } else {
-          console.error("Barq AI error:", err);
-          toast.error(err.message || "حدث خطأ أثناء التوليد");
+          console.error("Barq Builder error:", err);
+          toast.error(err.message || "حدث خطأ أثناء البناء");
+          const errContent = `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`;
+          updateAssistantMsg({ content: errContent, isStreaming: false });
+          saveMessage("assistant", errContent);
+        }
+      } finally {
+        clearTimeout(safetyTimeout);
+        setIsThinking(false);
+        setIsBuilding(false);
+        abortControllerRef.current = null;
+      }
+    },
+    [addLogEntry, applyVFSOperations, saveMessage, saveProject]
+  );
+
+  const handleSendMessage = useCallback(
+    async (content: string) => {
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      saveMessage("user", content);
+      setIsThinking(true);
+      setActiveTab("chat");
+
+      const conversationHistory = [
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content },
+      ];
+
+      const assistantMsgId = crypto.randomUUID();
+      let assistantContent = "";
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantMsgId,
+          role: "assistant",
+          content: "",
+          timestamp: new Date(),
+          isStreaming: true,
+        },
+      ]);
+
+      const updateAssistantMsg = (updates: Partial<ChatMessage>) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantMsgId ? { ...m, ...updates } : m))
+        );
+      };
+
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+      const safetyTimeout = setTimeout(() => {
+        abortController.abort();
+        toast.error("انتهت مهلة الاتصال، حاول مرة أخرى");
+      }, 50_000);
+
+      try {
+        await streamBarqPlanner(
+          conversationHistory,
+          {
+            onMessageDelta: (text) => {
+              assistantContent += text;
+              updateAssistantMsg({ content: assistantContent });
+            },
+            onBuildReady: (prompt, summary, projectName) => {
+              setBuildPrompt(prompt);
+              if (projectName) {
+                setBuildProjectName(projectName);
+                setProjectTitle(projectName);
+              }
+            },
+            onDone: () => {
+              updateAssistantMsg({ isStreaming: false });
+            },
+          },
+          abortController.signal
+        );
+        saveMessage("assistant", assistantContent);
+      } catch (err: any) {
+        if (err.name === "AbortError") {
+          if (assistantContent) {
+            updateAssistantMsg({ isStreaming: false });
+            saveMessage("assistant", assistantContent);
+          } else {
+            updateAssistantMsg({ content: "انقطع الاتصال، حاول مرة أخرى ⚡", isStreaming: false });
+          }
+        } else {
+          console.error("Barq Planner error:", err);
+          toast.error(err.message || "حدث خطأ");
           const errContent = `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`;
           updateAssistantMsg({ content: errContent, isStreaming: false });
           saveMessage("assistant", errContent);
@@ -294,7 +365,7 @@ export default function BuilderPage() {
         abortControllerRef.current = null;
       }
     },
-    [messages, addLogEntry, applyVFSOperations, saveMessage, saveProject]
+    [messages, saveMessage]
   );
 
   const handleAbort = () => {
@@ -467,6 +538,19 @@ export default function BuilderPage() {
                 </div>
               </div>
             ))}
+
+            {/* Build Ready Button */}
+            {buildPrompt && !isBuilding && !isThinking && (
+              <div className="flex justify-center animate-slide-up">
+                <button
+                  onClick={() => handleStartBuild(buildPrompt)}
+                  className="px-8 py-4 bg-primary text-primary-foreground rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 flex items-center gap-3"
+                >
+                  <Zap className="h-5 w-5" />
+                  ابدأ البناء ⚡
+                </button>
+              </div>
+            )}
 
             {isThinking && !messages.some((m) => m.isStreaming) && (
               <div className="flex gap-3 animate-slide-up">

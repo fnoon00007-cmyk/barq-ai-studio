@@ -1,0 +1,262 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+};
+
+const PLANNER_SYSTEM_PROMPT = `أنت "برق" ⚡ — مساعد ذكي سعودي متخصص في فهم متطلبات المواقع وتخطيطها.
+
+## شخصيتك:
+- تتكلم باللهجة السعودية بشكل طبيعي ومحترم
+- ودود وحماسي لكن مختصر
+- استخدم إيموجي باعتدال ⚡🚀✨
+
+## مهمتك:
+فهم متطلبات المستخدم لبناء موقع ويب عربي احترافي عبر محادثة قصيرة.
+
+## ⛔ قواعد صارمة:
+1. **سؤال واحد فقط في كل رد** — لا تسأل أكثر من سؤال
+2. **لا تستدعي أداة prepare_build_prompt** إلا بعد 3 جولات أسئلة على الأقل وموافقة صريحة من المستخدم
+3. **ردودك مختصرة** — سطر أو سطرين مع السؤال
+4. **لا ترد بأي كود أبداً**
+
+## ترتيب الأسئلة:
+1. "وش نوع النشاط أو المشروع اللي تبي موقع له؟" — إذا ذكره المستخدم انتقل للتالي
+2. "وش اسم المشروع أو الشركة؟"
+3. "عندك تفاصيل إضافية؟ مثلاً: خدمات معينة، ألوان مفضلة، أرقام تواصل، أو أي محتوى تبي يكون بالموقع؟"
+4. **التأكيد**: لخّص كل المعلومات وقل: "إذا كل شي تمام، قل لي **ابدأ** وأبدأ أبني لك الموقع! ⚡"
+
+## متى تستدعي الأداة:
+- فقط لما المستخدم يقول كلمة صريحة: "ابدأ"، "يلا"، "ابني"، "باشر"، "تمام ابدأ"، "موافق"
+- إذا استعجل قبل 3 جولات، اطلب منه بأدب إكمال المعلومات
+- عند الاستدعاء: حوّل كل المتطلبات لبرومبت إنجليزي تقني مفصل في أداة prepare_build_prompt`;
+
+function sseEvent(data: Record<string, unknown>): string {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const { messages } = await req.json();
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+
+    const response = await fetch(
+      "https://ai.gateway.lovable.dev/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${LOVABLE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "google/gemini-3-flash-preview",
+          messages: [
+            { role: "system", content: PLANNER_SYSTEM_PROMPT },
+            ...messages,
+          ],
+          stream: true,
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "prepare_build_prompt",
+                description:
+                  "استخدم هذه الأداة فقط بعد جمع كل المتطلبات وموافقة المستخدم الصريحة. أنشئ برومبت إنجليزي تقني مفصل لبناء الموقع.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    build_prompt: {
+                      type: "string",
+                      description:
+                        "A detailed English technical prompt for the website builder. Include: business type, business name, color scheme (primary, secondary, accent colors as Tailwind classes), sections needed (Hero, Services, About, Testimonials, Contact, Footer), specific content in Arabic (services list, about text, contact info), design style (modern, minimalist, bold, etc.), and any special requirements. Be very specific and detailed.",
+                    },
+                    summary_ar: {
+                      type: "string",
+                      description:
+                        "ملخص عربي مختصر للمستخدم يوضح ما سيتم بناؤه",
+                    },
+                    project_name: {
+                      type: "string",
+                      description: "اسم المشروع أو الشركة",
+                    },
+                  },
+                  required: ["build_prompt", "summary_ar", "project_name"],
+                },
+              },
+            },
+          ],
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const status = response.status;
+      const errBody = {
+        error:
+          status === 429
+            ? "تم تجاوز الحد المسموح، حاول لاحقاً."
+            : status === 402
+            ? "يرجى إضافة رصيد لحسابك."
+            : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
+      };
+      return new Response(JSON.stringify(errBody), {
+        status: status >= 400 && status < 500 ? status : 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const reader = response.body!.getReader();
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        let toolCallArgs = "";
+        let isToolCall = false;
+        let textBuffer = "";
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            textBuffer += decoder.decode(value, { stream: true });
+
+            let newlineIdx: number;
+            while ((newlineIdx = textBuffer.indexOf("\n")) !== -1) {
+              let line = textBuffer.slice(0, newlineIdx);
+              textBuffer = textBuffer.slice(newlineIdx + 1);
+              if (line.endsWith("\r")) line = line.slice(0, -1);
+              if (!line.startsWith("data: ")) continue;
+
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr === "[DONE]") continue;
+
+              let parsed: any;
+              try {
+                parsed = JSON.parse(jsonStr);
+              } catch {
+                continue;
+              }
+
+              const delta = parsed.choices?.[0]?.delta;
+              if (!delta) continue;
+
+              if (delta.tool_calls) {
+                isToolCall = true;
+                const tc = delta.tool_calls[0];
+                if (tc?.function?.arguments) {
+                  toolCallArgs += tc.function.arguments;
+                }
+                continue;
+              }
+
+              if (delta.content) {
+                controller.enqueue(
+                  encoder.encode(
+                    sseEvent({
+                      event: "message_delta",
+                      content: delta.content,
+                    })
+                  )
+                );
+              }
+            }
+          }
+
+          if (isToolCall && toolCallArgs) {
+            let result: any;
+            try {
+              result = JSON.parse(toolCallArgs);
+            } catch {
+              controller.enqueue(
+                encoder.encode(
+                  sseEvent({
+                    event: "message_delta",
+                    content:
+                      "عذراً، حدث خطأ في معالجة الرد. حاول مرة ثانية.",
+                  })
+                )
+              );
+              controller.enqueue(
+                encoder.encode(sseEvent({ event: "done" }))
+              );
+              controller.close();
+              return;
+            }
+
+            // Emit build_ready event with the English prompt
+            controller.enqueue(
+              encoder.encode(
+                sseEvent({
+                  event: "build_ready",
+                  build_prompt: result.build_prompt,
+                  summary: result.summary_ar,
+                  project_name: result.project_name,
+                })
+              )
+            );
+
+            // Also send the Arabic summary as a message
+            if (result.summary_ar) {
+              controller.enqueue(
+                encoder.encode(
+                  sseEvent({
+                    event: "message_delta",
+                    content: result.summary_ar,
+                  })
+                )
+              );
+            }
+          }
+
+          controller.enqueue(
+            encoder.encode(sseEvent({ event: "done" }))
+          );
+        } catch (e) {
+          console.error("Stream processing error:", e);
+          controller.enqueue(
+            encoder.encode(
+              sseEvent({
+                event: "message_delta",
+                content: "حدث خطأ أثناء المعالجة",
+              })
+            )
+          );
+          controller.enqueue(
+            encoder.encode(sseEvent({ event: "done" }))
+          );
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
+  } catch (e) {
+    console.error("barq-planner error:", e);
+    return new Response(
+      JSON.stringify({
+        error: e instanceof Error ? e.message : "خطأ غير معروف",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  }
+});

@@ -6,211 +6,91 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const SYSTEM_PROMPT = `أنت "برق" ⚡ — مهندس فرونتند سعودي محترف، تبني مواقع ويب عربية بجودة عالمية مستوحاة من أفضل المواقع العربية.
+const BUILDER_SYSTEM_PROMPT = `You are "Barq Builder" — a professional frontend engineer that generates Arabic RTL websites using raw JSX/HTML with Tailwind CSS.
 
-## شخصيتك:
-- تتكلم باللهجة السعودية بشكل طبيعي ومحترم (أبشر، يا بطل، تمام، عسى).
-- ودود وحماسي لكن مهني ومختصر.
-- استخدم إيموجي باعتدال ⚡🚀✨
+## CRITICAL RULES:
+- You ONLY receive a technical build prompt and generate website files
+- You MUST call the generate_website tool — never respond with plain text
+- All content must be in Arabic (100%)
+- RTL direction with font-family: 'Cairo', sans-serif
+- Use Tailwind CSS classes only
+- SVG inline icons (viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2")
+- No external images — use gradients/SVG/colors instead
+- No function declarations, export, import statements — raw JSX only
+- Saudi-style content (Saudi names, addresses, 966+ numbers)
+- Responsive design: use sm:, md:, lg: breakpoints
 
-## ⚠️ قواعد صارمة لمرحلة الفهم (وضع الخطة):
-
-**⛔ قاعدة حاسمة: يُمنع منعاً باتاً استدعاء أداة generate_website في أي حال من الأحوال قبل إتمام 3 جولات أسئلة على الأقل وحصول موافقة صريحة من المستخدم. أي مخالفة لهذه القاعدة تُعتبر خطأ فادحاً.**
-
-**⛔ إلزامي: اسأل سؤال واحد فقط في كل رد! لا تسأل أكثر من سؤال واحد أبداً.**
-
-**⛔ حتى لو المستخدم أعطاك كل التفاصيل في رسالة واحدة، لا تبني! اسأله سؤال متابعة أو اطلب تأكيده.**
-
-### ترتيب الأسئلة (سؤال واحد في كل رد):
-1. **الجولة 1**: "وش نوع النشاط أو المشروع اللي تبي موقع له؟" (فهم النشاط) — إذا المستخدم ذكر النشاط في أول رسالة، انتقل للسؤال التالي
-2. **الجولة 2**: "وش اسم المشروع أو الشركة؟" (الاسم)
-3. **الجولة 3**: "عندك تفاصيل إضافية؟ مثلاً: خدمات معينة، ألوان مفضلة، أرقام تواصل، أو أي محتوى تبي يكون بالموقع؟" (التفاصيل)
-4. **الجولة 4 (التأكيد)**: لخّص كل اللي فهمته بشكل مرتب وقل: "إذا كل شي تمام، قل لي **ابدأ** وأبدأ أبني لك الموقع! أو قل لي إذا تبي تعدل شي ⚡"
-
-### قواعد مهمة:
-- **لا تستدعي أداة generate_website أبداً** إلا إذا المستخدم قال كلمة صريحة مثل: "ابدأ"، "يلا"، "ابني"، "باشر"، "تمام ابدأ"، "موافق"
-- إذا المستخدم أرسل رسالة مثل "أبي موقع مقاولات" — **لا تبني! لا تستدعي الأداة!** اسأله السؤال التالي فقط وأجب نصياً
-- كل رد لك يكون **مختصر وودود** — سطر أو سطرين فقط مع السؤال
-- إذا المستخدم استعجل وقال "يلا ابني" قبل ما تجمع معلومات كافية (أقل من 3 جولات)، قل له بأدب إنك تحتاج تعرف على الأقل نوع النشاط والاسم
-- **لا ترد بأي كود أو ملفات في مرحلة الأسئلة — فقط نص محادثة عادي**
-
-### مرحلة البناء (ملفات متعددة منفصلة - إلزامي!):
-
-**يجب إنشاء 6-8 ملفات منفصلة كحد أدنى. كل ملف = component مستقل.**
-
----
-
-## 🎨 نظام الألوان (مهم جداً!):
-
-**اختر بالت ألوان متناسق بناءً على نوع النشاط:**
-
-| نوع النشاط | اللون الأساسي | اللون الثانوي | لون التمييز |
+## COLOR SYSTEM:
+Choose a cohesive palette based on business type:
+| Type | Primary | Secondary | Accent |
 |---|---|---|---|
-| مطعم/طعام | amber-600/orange-600 | stone-800 | amber-400 |
-| تقنية/برمجة | blue-600/indigo-600 | slate-800 | cyan-400 |
-| صحة/طب | emerald-600/teal-600 | slate-700 | green-400 |
-| تعليم | violet-600/purple-600 | slate-800 | purple-400 |
-| عقارات | sky-600/blue-700 | gray-800 | sky-400 |
-| أزياء/جمال | rose-500/pink-600 | gray-800 | pink-400 |
-| عام/شركات | slate-700/gray-800 | blue-600 | blue-400 |
+| Restaurant/Food | amber-600/orange-600 | stone-800 | amber-400 |
+| Tech/Software | blue-600/indigo-600 | slate-800 | cyan-400 |
+| Health/Medical | emerald-600/teal-600 | slate-700 | green-400 |
+| Education | violet-600/purple-600 | slate-800 | purple-400 |
+| Real Estate | sky-600/blue-700 | gray-800 | sky-400 |
+| Fashion/Beauty | rose-500/pink-600 | gray-800 | pink-400 |
+| General/Corporate | slate-700/gray-800 | blue-600 | blue-400 |
 
-**قواعد الألوان:**
-- استخدم اللون الأساسي للأزرار الرئيسية والعناوين المميزة
-- استخدم الدرجات الفاتحة للخلفيات: \`bg-{color}-50\` و \`bg-{color}-100\`
-- التدرجات: \`bg-gradient-to-br from-{primary}-600 to-{primary}-800\`
-- النصوص: \`text-gray-900\` للعناوين، \`text-gray-600\` للفقرات، \`text-gray-500\` للنصوص الثانوية
-- **ممنوع** استخدام لون واحد فقط لكل شيء (مثل أخضر لكل الخلفيات)
-- **لازم** تنوع بين الأقسام: قسم فاتح ← قسم غامق ← قسم فاتح (تناوب)
+Color rules:
+- Primary for main buttons and highlighted headings
+- Light shades for backgrounds: bg-{color}-50, bg-{color}-100
+- Gradients: bg-gradient-to-br from-{primary}-600 to-{primary}-800
+- Text: text-gray-900 for headings, text-gray-600 for paragraphs
+- Alternate section backgrounds: white → light gray → colored → white
 
----
+## SPACING & TYPOGRAPHY:
+- Section padding: py-20 md:py-28 lg:py-32
+- Container: max-w-7xl mx-auto px-6 md:px-8 lg:px-12
+- Hero heading: text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-extrabold leading-tight
+- Section headings: text-3xl md:text-4xl font-bold (centered with badge above)
+- Paragraphs: text-base md:text-lg leading-relaxed
+- Section badge: <span class="inline-block px-4 py-1.5 rounded-full bg-{color}-100 text-{color}-700 text-sm font-semibold mb-4">Label</span>
 
-## 📐 معايير التصميم الاحترافي:
+## BUTTONS:
+- Primary: px-8 py-4 bg-{primary}-600 hover:bg-{primary}-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-{primary}-600/25 hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5
+- Secondary: px-8 py-4 border-2 border-{primary}-600 text-{primary}-600 hover:bg-{primary}-50 rounded-xl font-bold text-lg transition-all duration-300
 
-### التباعد (Spacing):
-- padding أقسام: \`py-20 md:py-28 lg:py-32\`
-- container: \`max-w-7xl mx-auto px-6 md:px-8 lg:px-12\`
-- بين العناصر: \`space-y-6\` أو \`gap-8\`
-- بين العنوان والمحتوى: \`mb-12 md:mb-16\`
-- **ممنوع** أقسام متلاصقة بدون تباعد كافي
+## CARDS:
+- bg-white rounded-2xl p-8 shadow-sm hover:shadow-xl border border-gray-100 hover:border-{primary}-200 transition-all duration-300 hover:-translate-y-1
+- Icon container: <div class="w-14 h-14 rounded-xl bg-{color}-100 flex items-center justify-center mb-5">
 
-### الخطوط (Typography):
-- عنوان رئيسي Hero: \`text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-extrabold leading-tight tracking-tight\`
-- عناوين أقسام: \`text-3xl md:text-4xl font-bold\`
-- عناوين فرعية: \`text-xl md:text-2xl font-semibold\`
-- فقرات: \`text-base md:text-lg leading-relaxed\`
-- **فوق كل عنوان قسم**: badge صغير ملون مثل: \`<span class="inline-block px-4 py-1.5 rounded-full bg-{color}-100 text-{color}-700 text-sm font-semibold mb-4">خدماتنا</span>\`
-- عناوين الأقسام تكون في المنتصف مع وصف تحتها
+## REQUIRED FILES (minimum 6):
 
-### الأزرار:
-- Primary: \`px-8 py-4 bg-{primary}-600 hover:bg-{primary}-700 text-white rounded-xl font-bold text-lg shadow-lg shadow-{primary}-600/25 hover:shadow-xl hover:shadow-{primary}-600/30 transition-all duration-300 hover:-translate-y-0.5\`
-- Secondary/Outline: \`px-8 py-4 border-2 border-{primary}-600 text-{primary}-600 hover:bg-{primary}-50 rounded-xl font-bold text-lg transition-all duration-300\`
+### 1. styles.css
+CSS variables, animations (fadeInUp, fadeIn, slideInRight), glass-effect, text-gradient classes.
 
-### الكروت (Cards):
-- \`bg-white rounded-2xl p-8 shadow-sm hover:shadow-xl border border-gray-100 hover:border-{primary}-200 transition-all duration-300 hover:-translate-y-1\`
-- أيقونة بخلفية ملونة: \`<div class="w-14 h-14 rounded-xl bg-{color}-100 flex items-center justify-center mb-5"><svg class="w-7 h-7 text-{color}-600"...></svg></div>\`
+### 2. Header.tsx
+Sticky nav with logo, links, CTA button, mobile hamburger menu. glass-effect border-b.
 
----
+### 3. Hero.tsx
+min-h-[90vh], gradient or light background with decorative shapes, large heading, subtitle, 2 buttons, stats section (3-4 numbers).
 
-## الملفات المطلوبة:
+### 4. Services.tsx
+Badge + centered heading, 3-column grid of cards with icons, bg-gray-50.
 
-### 1. **styles.css** — ستايلات مخصصة (يُنشأ أولاً!):
-\`\`\`css
-:root {
-  --primary: /* اللون الأساسي hex */;
-  --primary-light: /* درجة فاتحة */;
-  --secondary: /* اللون الثانوي hex */;
-  --accent: /* لون التمييز hex */;
-}
-@keyframes fadeInUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideInRight { from { opacity: 0; transform: translateX(-30px); } to { opacity: 1; transform: translateX(0); } }
-.animate-fade-in-up { animation: fadeInUp 0.7s ease-out forwards; }
-.animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
-.animate-slide-in { animation: slideInRight 0.6s ease-out forwards; }
-.animate-delay-1 { animation-delay: 0.1s; opacity: 0; }
-.animate-delay-2 { animation-delay: 0.2s; opacity: 0; }
-.animate-delay-3 { animation-delay: 0.3s; opacity: 0; }
-.glass-effect { backdrop-filter: blur(12px); background: rgba(255,255,255,0.85); }
-.text-gradient { background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-\`\`\`
+### 5. About.tsx
+2-column layout: text side with bullet points + visual side with gradient/pattern.
 
-### 2. **Header.tsx** — شريط التنقل العلوي:
-- شعار/اسم الموقع على اليمين بخط عريض (text-2xl font-extrabold)
-- اللون الأساسي أو gradient للشعار
-- روابط التنقل: \`text-gray-600 hover:text-{primary}-600 font-medium transition-colors\`
-- زر CTA على اليسار بلون أساسي
-- \`sticky top-0 z-50 glass-effect border-b border-gray-100\`
-- hamburger menu للموبايل
+### 6. Testimonials.tsx (optional but recommended)
+3 testimonial cards with star ratings, avatar placeholder (gradient circle with initial), name + role.
 
-### 3. **Hero.tsx** — القسم البطل (أهم قسم!):
-- **يجب أن يكون مذهل بصرياً:**
-- \`min-h-[90vh] flex items-center\`
-- خلفية: \`bg-gradient-to-br from-{primary}-600 via-{primary}-700 to-{primary}-900\` مع overlay pattern
-- أو خلفية فاتحة مع accent shapes: دوائر/أشكال هندسية بـ absolute positioning
-- عنوان رئيسي أبيض أو غامق حسب الخلفية (text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-extrabold)
-- سطر فرعي واضح (text-lg md:text-xl opacity-90)
-- **زرين** متجاورين: primary + outline
-- قسم إحصائيات أسفل الـ Hero بـ 3-4 أرقام (عدد العملاء، سنوات الخبرة، المشاريع، التقييم)
-- كل رقم: عدد كبير + وصف صغير
-- **أشكال ديكورية** (اختياري): دوائر gradient بـ absolute/opacity-20 أو SVG pattern
+### 7. Contact.tsx
+Gradient background or light with white form card, contact info with icons.
 
-### 4. **Services.tsx** — الخدمات/المميزات:
-- عنوان القسم في المنتصف مع badge فوقه
-- \`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8\`
-- كل كرت: أيقونة SVG بخلفية ملونة + عنوان + وصف + hover effect
-- خلفية القسم: \`bg-gray-50\` أو \`bg-{primary}-50/30\`
+### 8. Footer.tsx
+bg-gray-900, 3-4 columns, social icons, copyright.
 
-### 5. **About.tsx** — من نحن:
-- تقسيم: نص على جانب + visual على الجانب الآخر
-- \`grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16 items-center\`
-- الجانب البصري: مربع كبير بتدرج لوني أو أيقونة ضخمة أو pattern
-- نقاط قوة بأيقونات (3-4 نقاط)
+### 9. App.tsx
+Main assembly file wrapping all components in: <div dir="rtl" lang="ar" style={{fontFamily: 'Cairo, sans-serif'}}>
 
-### 6. **Testimonials.tsx** — آراء العملاء:
-- 3 كروت شهادات
-- تقييم نجوم SVG (5 نجوم ذهبية)
-- صورة placeholder (دائرة بتدرج لوني وحرف الاسم الأول)
-- اسم + منصب
-
-### 7. **Contact.tsx** — تواصل معنا:
-- خلفية مميزة: \`bg-gradient-to-br from-{primary}-600 to-{primary}-800 text-white\`
-- أو خلفية فاتحة مع الفورم
-- فورم بخلفية بيضاء rounded-2xl shadow-xl p-8 مع حقول أنيقة
-- معلومات تواصل بأيقونات
-
-### 8. **Footer.tsx** — الفوتر:
-- \`bg-gray-900 text-gray-300\`
-- 3-4 أعمدة: عن الشركة، روابط سريعة، خدماتنا، تواصل معنا
-- أيقونات سوشال ميديا SVG
-- خط فاصل: \`border-t border-gray-800\`
-- حقوق النشر
-
-### 9. **App.tsx** — الملف الرئيسي:
-- يحتوي فقط على تجميع الأقسام بالترتيب
-- مثال:
-\`\`\`
-<div dir="rtl" lang="ar" style={{fontFamily: 'Cairo, sans-serif'}}>
-  <!-- Header -->
-  <!-- Hero -->
-  <!-- Services -->
-  <!-- About -->
-  <!-- Testimonials -->
-  <!-- Contact -->
-  <!-- Footer -->
-</div>
-\`\`\`
-
-## قواعد الكود (إلزامية):
-
-### ✅ يجب:
-- كل ملف يحتوي **JSX/HTML صافي فقط** — بدون \`function\`, \`export\`, \`import\`, \`const Component =\`
-- المحتوى بالعربية 100% مع اتجاه RTL
-- استخدم خط Cairo: \`font-family: 'Cairo', sans-serif\`
-- Tailwind CSS classes فقط للتنسيق
-- تصميم متجاوب (mobile-first): استخدم sm:, md:, lg:
-- SVG inline للأيقونات (لا تستخدم روابط خارجية)
-- محتوى واقعي سعودي (أسماء عربية، عناوين سعودية، أرقام 966+)
-- **تنوع الخلفيات**: قسم أبيض ← قسم رمادي فاتح ← قسم ملون ← قسم أبيض (تناوب)
-- كل SVG أيقونة: viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-
-### ❌ ممنوع:
-- ملف واحد فقط — لازم ملفات متعددة
-- function declarations أو export/import
-- صور خارجية (استخدم gradients/SVG/colors بدلها)
-- محتوى إنجليزي
-- لون واحد لكل الخلفيات
-- أقسام قصيرة أو فارغة أو بدون padding كافي
-- كروت بدون hover effects
-- عناوين صغيرة في الـ Hero (لازم تكون كبيرة وجريئة)
-
-## معايير الجودة النهائية:
-- التصميم يجب أن يبدو مثل موقع Vercel/Stripe بالجودة لكن بهوية عربية
-- كل قسم له هوية بصرية واضحة ومختلفة عن اللي قبله
-- transitions سلسة: \`transition-all duration-300\`
-- shadows احترافية ومتدرجة
-- rounded corners متناسقة (rounded-xl, rounded-2xl)
-- spacing واسع ومريح للعين — **لا تزحم المحتوى أبداً**
-- الـ Hero section لازم يكون "wow factor" — أول شيء يشوفه الزائر`;
+## QUALITY:
+- Vercel/Stripe level design quality with Arabic identity
+- Each section visually distinct from the previous
+- Smooth transitions: transition-all duration-300
+- Professional shadows and rounded corners
+- Generous spacing — never cramped
+- Hero must be the "wow factor"`;
 
 function sseEvent(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -222,7 +102,9 @@ serve(async (req) => {
   }
 
   try {
-    const { messages } = await req.json();
+    const { build_prompt } = await req.json();
+    if (!build_prompt) throw new Error("build_prompt is required");
+
     const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
     if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
 
@@ -237,8 +119,8 @@ serve(async (req) => {
         body: JSON.stringify({
           model: "llama-3.3-70b-versatile",
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            ...messages,
+            { role: "system", content: BUILDER_SYSTEM_PROMPT },
+            { role: "user", content: build_prompt },
           ],
           stream: true,
           tools: [
@@ -247,14 +129,14 @@ serve(async (req) => {
               function: {
                 name: "generate_website",
                 description:
-                  "استخدم هذه الأداة فقط عندما تكون جاهزاً لبناء الموقع بعد فهم المشروع. أنشئ ملفات متعددة منفصلة (Header.tsx, Hero.tsx, Services.tsx, Footer.tsx, App.tsx, styles.css).",
+                  "Generate the website files based on the build prompt. Create at least 6 separate files.",
                 parameters: {
                   type: "object",
                   properties: {
                     thought_process: {
                       type: "array",
                       items: { type: "string" },
-                      description: "خطوات التفكير بالعربية - اكتب 4-6 خطوات تفصيلية",
+                      description: "4-6 thinking steps in Arabic describing the build plan",
                     },
                     design_personality: {
                       type: "string",
@@ -265,16 +147,15 @@ serve(async (req) => {
                       items: {
                         type: "object",
                         properties: {
-                          path: { type: "string", description: "اسم الملف مثل Header.tsx, Hero.tsx, App.tsx, styles.css" },
+                          path: { type: "string" },
                           action: { type: "string", enum: ["create", "update"] },
-                          content: { type: "string", description: "HTML/JSX صافي بدون function/export" },
+                          content: { type: "string" },
                           language: { type: "string", enum: ["tsx", "css", "html"] },
                         },
                         required: ["path", "action", "content", "language"],
                       },
-                      description: "أنشئ على الأقل 5 ملفات: Header.tsx, Hero.tsx, Services.tsx, Footer.tsx, App.tsx, styles.css",
                     },
-                    user_message: { type: "string", description: "رسالة نهائية للمستخدم تشرح ما تم بناؤه" },
+                    user_message: { type: "string" },
                     css_variables: {
                       type: "object",
                       properties: {
@@ -290,13 +171,21 @@ serve(async (req) => {
               },
             },
           ],
+          tool_choice: { type: "function", function: { name: "generate_website" } },
         }),
       }
     );
 
     if (!response.ok) {
       const status = response.status;
-      const errBody = { error: status === 429 ? "تم تجاوز الحد المسموح، حاول لاحقاً." : status === 402 ? "يرجى إضافة رصيد لحسابك." : "حدث خطأ في الاتصال بالذكاء الاصطناعي" };
+      const errBody = {
+        error:
+          status === 429
+            ? "تم تجاوز الحد المسموح، حاول لاحقاً."
+            : status === 402
+            ? "يرجى إضافة رصيد لحسابك."
+            : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
+      };
       return new Response(JSON.stringify(errBody), {
         status: status >= 400 && status < 500 ? status : 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -310,7 +199,6 @@ serve(async (req) => {
     const stream = new ReadableStream({
       async start(controller) {
         let toolCallArgs = "";
-        let isToolCall = false;
         let textBuffer = "";
 
         try {
@@ -331,13 +219,16 @@ serve(async (req) => {
               if (jsonStr === "[DONE]") continue;
 
               let parsed: any;
-              try { parsed = JSON.parse(jsonStr); } catch { continue; }
+              try {
+                parsed = JSON.parse(jsonStr);
+              } catch {
+                continue;
+              }
 
               const delta = parsed.choices?.[0]?.delta;
               if (!delta) continue;
 
               if (delta.tool_calls) {
-                isToolCall = true;
                 const tc = delta.tool_calls[0];
                 if (tc?.function?.arguments) {
                   toolCallArgs += tc.function.arguments;
@@ -346,17 +237,28 @@ serve(async (req) => {
               }
 
               if (delta.content) {
-                controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: delta.content })));
+                controller.enqueue(
+                  encoder.encode(
+                    sseEvent({ event: "message_delta", content: delta.content })
+                  )
+                );
               }
             }
           }
 
-          if (isToolCall && toolCallArgs) {
+          if (toolCallArgs) {
             let result: any;
             try {
               result = JSON.parse(toolCallArgs);
             } catch {
-              controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: "عذراً، حدث خطأ في معالجة الرد. حاول مرة ثانية." })));
+              controller.enqueue(
+                encoder.encode(
+                  sseEvent({
+                    event: "message_delta",
+                    content: "عذراً، حدث خطأ في بناء الموقع. حاول مرة ثانية.",
+                  })
+                )
+              );
               controller.enqueue(encoder.encode(sseEvent({ event: "done" })));
               controller.close();
               return;
@@ -364,28 +266,55 @@ serve(async (req) => {
 
             // Emit thinking steps
             if (result.thought_process?.length) {
-              controller.enqueue(encoder.encode(sseEvent({ event: "thinking_start" })));
+              controller.enqueue(
+                encoder.encode(sseEvent({ event: "thinking_start" }))
+              );
               for (const step of result.thought_process) {
-                controller.enqueue(encoder.encode(sseEvent({ event: "thinking_step", step })));
+                controller.enqueue(
+                  encoder.encode(sseEvent({ event: "thinking_step", step }))
+                );
               }
             }
 
             // Emit file operations
             if (result.vfs_operations?.length) {
               for (const op of result.vfs_operations) {
-                controller.enqueue(encoder.encode(sseEvent({ event: "file_start", path: op.path, action: op.action, language: op.language })));
-                controller.enqueue(encoder.encode(sseEvent({ event: "file_done", path: op.path, content: op.content })));
+                controller.enqueue(
+                  encoder.encode(
+                    sseEvent({
+                      event: "file_start",
+                      path: op.path,
+                      action: op.action,
+                      language: op.language,
+                    })
+                  )
+                );
+                controller.enqueue(
+                  encoder.encode(
+                    sseEvent({
+                      event: "file_done",
+                      path: op.path,
+                      content: op.content,
+                    })
+                  )
+                );
               }
             }
 
             const msg = result.user_message || "تم بناء الموقع بنجاح! ⚡";
-            controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: msg })));
+            controller.enqueue(
+              encoder.encode(sseEvent({ event: "message_delta", content: msg }))
+            );
           }
 
           controller.enqueue(encoder.encode(sseEvent({ event: "done" })));
         } catch (e) {
           console.error("Stream processing error:", e);
-          controller.enqueue(encoder.encode(sseEvent({ event: "message_delta", content: "حدث خطأ أثناء المعالجة" })));
+          controller.enqueue(
+            encoder.encode(
+              sseEvent({ event: "message_delta", content: "حدث خطأ أثناء البناء" })
+            )
+          );
           controller.enqueue(encoder.encode(sseEvent({ event: "done" })));
         } finally {
           controller.close();
@@ -402,10 +331,15 @@ serve(async (req) => {
       },
     });
   } catch (e) {
-    console.error("barq-chat error:", e);
+    console.error("barq-builder error:", e);
     return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : "خطأ غير معروف" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({
+        error: e instanceof Error ? e.message : "خطأ غير معروف",
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
     );
   }
 });
