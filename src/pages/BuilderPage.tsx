@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen, FileCode, Save } from "lucide-react";
+import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ResizableHandle,
@@ -26,6 +26,7 @@ export default function BuilderPage() {
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [mobileView, setMobileView] = useState<"preview" | "chat">("chat");
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
   const [projectTitle, setProjectTitle] = useState("مشروع جديد");
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId || null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -582,16 +583,56 @@ export default function BuilderPage() {
             </span>
           </div>
         </div>
-        {files.length > 0 && (
-          <div className="flex items-center gap-1">
-            <span className="text-xs text-muted-foreground">{files.length} ملفات</span>
+        <div className="flex items-center gap-1">
+          {/* Device toggle buttons */}
+          <div className="flex items-center bg-secondary rounded-lg p-0.5 gap-0.5">
+            <button
+              onClick={() => setPreviewDevice("mobile")}
+              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
+                previewDevice === "mobile" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+              }`}
+              title="موبايل"
+            >
+              <Smartphone className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setPreviewDevice("tablet")}
+              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
+                previewDevice === "tablet" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+              }`}
+              title="تابلت"
+            >
+              <Tablet className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setPreviewDevice("desktop")}
+              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
+                previewDevice === "desktop" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+              }`}
+              title="ديسكتوب"
+            >
+              <Monitor className="h-4 w-4" />
+            </button>
           </div>
-        )}
+          {files.length > 0 && (
+            <span className="text-xs text-muted-foreground mr-2">{files.length} ملفات</span>
+          )}
+        </div>
       </div>
 
       {/* Preview iframe */}
-      <div className="flex-1 overflow-hidden">
-        <PreviewPanel files={files} />
+      <div className="flex-1 overflow-hidden flex items-start justify-center bg-muted/30">
+        <div
+          className={`h-full transition-all duration-300 ease-in-out ${
+            previewDevice === "mobile"
+              ? "w-[375px] border-x border-border shadow-lg rounded-b-xl"
+              : previewDevice === "tablet"
+              ? "w-[768px] border-x border-border shadow-lg rounded-b-xl"
+              : "w-full"
+          }`}
+        >
+          <PreviewPanel files={files} />
+        </div>
       </div>
     </div>
   );
