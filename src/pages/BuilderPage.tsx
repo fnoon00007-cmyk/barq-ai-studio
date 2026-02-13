@@ -217,6 +217,12 @@ export default function BuilderPage() {
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
+      // Safety timeout: if stream hangs for 50s total, abort
+      const safetyTimeout = setTimeout(() => {
+        abortController.abort();
+        toast.error("انتهت مهلة الاتصال، حاول مرة أخرى");
+      }, 50_000);
+
       try {
         await streamBarqAI(
           conversationHistory,
@@ -263,18 +269,27 @@ export default function BuilderPage() {
           abortController.signal
         );
         saveMessage("assistant", assistantContent);
-        // Auto-save after generation
         if (pendingOps.length > 0) {
           setTimeout(() => saveProject(), 500);
         }
       } catch (err: any) {
-        if (err.name === "AbortError") return;
-        console.error("Barq AI error:", err);
-        toast.error(err.message || "حدث خطأ أثناء التوليد");
-        const errContent = `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`;
-        updateAssistantMsg({ content: errContent, isStreaming: false });
-        saveMessage("assistant", errContent);
+        if (err.name === "AbortError") {
+          // If we have partial content, still save & show it
+          if (assistantContent) {
+            updateAssistantMsg({ isStreaming: false });
+            saveMessage("assistant", assistantContent);
+          } else {
+            updateAssistantMsg({ content: "انقطع الاتصال، حاول مرة أخرى ⚡", isStreaming: false });
+          }
+        } else {
+          console.error("Barq AI error:", err);
+          toast.error(err.message || "حدث خطأ أثناء التوليد");
+          const errContent = `عذراً، حدث خطأ: ${err.message}. حاول مرة أخرى. ⚡`;
+          updateAssistantMsg({ content: errContent, isStreaming: false });
+          saveMessage("assistant", errContent);
+        }
       } finally {
+        clearTimeout(safetyTimeout);
         setIsThinking(false);
         abortControllerRef.current = null;
       }
