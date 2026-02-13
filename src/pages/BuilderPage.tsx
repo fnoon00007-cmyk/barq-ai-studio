@@ -162,6 +162,19 @@ export default function BuilderPage() {
     }
   }, [userId, files, currentProjectId, projectTitle, navigate]);
 
+  // Auto-save project when files change
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!userId || files.length === 0) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveProject();
+    }, 2000);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [files, userId, saveProject]);
+
   const clearMessages = useCallback(async () => {
     if (!userId) return;
     setMessages([]);
