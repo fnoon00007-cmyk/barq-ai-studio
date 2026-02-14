@@ -1,10 +1,35 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Plus, Globe, Calendar, Loader2, Trash2, Zap, LogOut, ArrowLeft } from "lucide-react";
+import { Plus, Globe, Calendar, Loader2, Trash2, Zap, LogOut, MoreVertical, Pencil } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { ar } from "date-fns/locale";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface Project {
   id: string;
@@ -13,11 +38,16 @@ interface Project {
   status: string | null;
   created_at: string;
   updated_at: string;
+  thumbnail_url: string | null;
+  preview_html: string | null;
 }
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [renameTarget, setRenameTarget] = useState<Project | null>(null);
+  const [newTitle, setNewTitle] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -27,7 +57,7 @@ export default function ProjectsPage() {
   const fetchProjects = async () => {
     const { data, error } = await supabase
       .from("projects")
-      .select("id, title, description, status, created_at, updated_at")
+      .select("id, title, description, status, created_at, updated_at, thumbnail_url, preview_html")
       .order("updated_at", { ascending: false });
 
     if (error) {
@@ -55,15 +85,34 @@ export default function ProjectsPage() {
     }
   };
 
-  const deleteProject = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const { error } = await supabase.from("projects").delete().eq("id", id);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const { error } = await supabase.from("projects").delete().eq("id", deleteTarget.id);
     if (error) {
       toast.error("خطأ في حذف المشروع");
     } else {
-      setProjects((prev) => prev.filter((p) => p.id !== id));
+      setProjects((prev) => prev.filter((p) => p.id !== deleteTarget.id));
       toast.success("تم حذف المشروع");
     }
+    setDeleteTarget(null);
+  };
+
+  const confirmRename = async () => {
+    if (!renameTarget || !newTitle.trim()) return;
+    const { error } = await supabase
+      .from("projects")
+      .update({ title: newTitle.trim() })
+      .eq("id", renameTarget.id);
+    if (error) {
+      toast.error("خطأ في تعديل الاسم");
+    } else {
+      setProjects((prev) =>
+        prev.map((p) => (p.id === renameTarget.id ? { ...p, title: newTitle.trim() } : p))
+      );
+      toast.success("تم تعديل اسم المشروع");
+    }
+    setRenameTarget(null);
+    setNewTitle("");
   };
 
   const handleLogout = async () => {
@@ -131,12 +180,31 @@ export default function ProjectsPage() {
                 onClick={() => navigate(`/builder/${project.id}`)}
                 className="group bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 transition-all cursor-pointer"
               >
-                <div className="aspect-video bg-secondary flex items-center justify-center relative">
-                  <Globe className="h-10 w-10 text-muted-foreground/15" />
+                {/* Thumbnail / Preview */}
+                <div className="aspect-video bg-secondary relative overflow-hidden">
+                  {project.thumbnail_url ? (
+                    <img
+                      src={project.thumbnail_url}
+                      alt={project.title}
+                      className="w-full h-full object-cover object-top"
+                    />
+                  ) : project.preview_html ? (
+                    <iframe
+                      srcDoc={project.preview_html}
+                      className="w-[200%] h-[200%] origin-top-left scale-50 pointer-events-none"
+                      sandbox=""
+                      tabIndex={-1}
+                      title={project.title}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Globe className="h-10 w-10 text-muted-foreground/15" />
+                    </div>
+                  )}
                   <div className="absolute top-3 left-3">
                     <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
-                      project.status === "published" 
-                        ? "bg-green-500/15 text-green-400" 
+                      project.status === "published"
+                        ? "bg-green-500/15 text-green-400"
                         : "bg-accent/15 text-accent"
                     }`}>
                       {project.status === "published" ? "منشور" : "مسودة"}
@@ -154,12 +222,37 @@ export default function ProjectsPage() {
                       <Calendar className="h-3.5 w-3.5" />
                       {format(new Date(project.updated_at), "d MMM yyyy", { locale: ar })}
                     </span>
-                    <button
-                      onClick={(e) => deleteProject(project.id, e)}
-                      className="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+
+                    {/* 3-dot menu */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <button className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors opacity-0 group-hover:opacity-100">
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenameTarget(project);
+                            setNewTitle(project.title);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4 ml-2" />
+                          تعديل الاسم
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteTarget(project);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 ml-2" />
+                          حذف المشروع
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               </div>
@@ -167,6 +260,44 @@ export default function ProjectsPage() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>هل أنت متأكد من حذف المشروع؟</AlertDialogTitle>
+            <AlertDialogDescription>
+              سيتم حذف "{deleteTarget?.title}" نهائياً ولا يمكن التراجع عن هذا الإجراء.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              حذف
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Rename Dialog */}
+      <Dialog open={!!renameTarget} onOpenChange={(o) => !o && setRenameTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>تعديل اسم المشروع</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            placeholder="اسم المشروع الجديد"
+            className="text-right"
+            onKeyDown={(e) => e.key === "Enter" && confirmRename()}
+          />
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setRenameTarget(null)}>إلغاء</Button>
+            <Button onClick={confirmRename} disabled={!newTitle.trim()}>حفظ</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
