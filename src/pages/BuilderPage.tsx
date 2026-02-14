@@ -1,12 +1,12 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { ChatMessage, ThinkingStep } from "@/hooks/useVFS";
 import { useVFS } from "@/hooks/useVFS";
-import { streamBarqPlanner, streamBarqBuilder } from "@/lib/barq-api";
+import { streamBarqPlanner, streamBarqBuilder, reviewBuild, githubExportAction } from "@/lib/barq-api";
 import { toast } from "sonner";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { supabase } from "@/integrations/supabase/client";
-import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor } from "lucide-react";
+import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor, Github, ExternalLink, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ResizableHandle,
@@ -33,6 +33,10 @@ export default function BuilderPage() {
   const [buildPrompt, setBuildPrompt] = useState<string | null>(null);
   const [buildProjectName, setBuildProjectName] = useState<string | null>(null);
   const [isBuilding, setIsBuilding] = useState(false);
+  const [showGithubExport, setShowGithubExport] = useState(false);
+  const [githubToken, setGithubToken] = useState<string | null>(null);
+  const [githubExporting, setGithubExporting] = useState(false);
+  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const promptSentRef = useRef(false);
@@ -249,9 +253,60 @@ export default function BuilderPage() {
               assistantContent += text;
               updateAssistantMsg({ content: assistantContent });
             },
-            onDone: () => {
+            onDone: async () => {
               if (pendingOps.length > 0) {
                 applyVFSOperations(pendingOps);
+                updateAssistantMsg({ isStreaming: false });
+
+                // === REVIEW PHASE ===
+                setReviewStatus("reviewing");
+                addLogEntry("read", "مراجعة الملفات بواسطة المدير (Gemini)...");
+                try {
+                  const reviewResult = await reviewBuild(prompt, pendingOps);
+                  if (reviewResult.status === "approved") {
+                    setReviewStatus("approved");
+                    addLogEntry("complete", "✅ تمت المراجعة — الموقع مكتمل!");
+                    toast.success("تمت المراجعة بنجاح! الموقع مكتمل ⚡");
+                  } else {
+                    setReviewStatus("fixing");
+                    addLogEntry("update", `🔧 تم اكتشاف ${reviewResult.issues.length} مشكلة — جاري الإصلاح...`);
+                    
+                    // Show review summary
+                    const reviewMsgId = crypto.randomUUID();
+                    setMessages((prev) => [...prev, {
+                      id: reviewMsgId,
+                      role: "assistant",
+                      content: `🔍 مراجعة المدير:\n${reviewResult.summary_ar}\n\nجاري إصلاح ${reviewResult.issues.length} مشكلة تلقائياً...`,
+                      timestamp: new Date(),
+                    }]);
+
+                    // Send fix prompt to Groq
+                    if (reviewResult.fix_prompt) {
+                      const fixPrompt = `${prompt}\n\n## FIX INSTRUCTIONS:\n${reviewResult.fix_prompt}\n\n## EXISTING FILES:\n${pendingOps.map(f => `- ${f.path}`).join("\n")}\n\nFix the issues and regenerate ONLY the affected files.`;
+                      
+                      const fixOps: typeof pendingOps = [];
+                      await streamBarqBuilder(fixPrompt, {
+                        onFileStart: (path) => addLogEntry("update", `إصلاح ${path}...`),
+                        onFileDone: (path, content) => {
+                          fixOps.push({ path, action: "update", content, language: path.endsWith(".css") ? "css" : "tsx" });
+                        },
+                        onDone: () => {
+                          if (fixOps.length > 0) {
+                            applyVFSOperations(fixOps);
+                          }
+                          setReviewStatus("approved");
+                          addLogEntry("complete", "✅ تم الإصلاح — الموقع مكتمل!");
+                          toast.success("تم إصلاح المشاكل! الموقع مكتمل ⚡");
+                        },
+                      });
+                    }
+                  }
+                } catch (reviewErr) {
+                  console.error("Review error:", reviewErr);
+                  setReviewStatus(null);
+                  // Review failed but build succeeded - still ok
+                }
+
                 toast("المعاينة جاهزة! ⚡", {
                   description: "تم بناء موقعك بنجاح",
                   action: { label: "انتقل للمعاينة", onClick: () => setMobileView("preview") },
@@ -402,6 +457,68 @@ export default function BuilderPage() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate("/");
+  };
+
+  // GitHub OAuth callback handler
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get("code");
+    if (code && !githubToken) {
+      githubExportAction("exchange_code", { code }).then((data) => {
+        if (data.access_token) {
+          setGithubToken(data.access_token);
+          setShowGithubExport(true);
+          toast.success("تم ربط GitHub بنجاح! ⚡");
+          // Clean URL
+          window.history.replaceState({}, "", window.location.pathname);
+        }
+      }).catch((err) => {
+        toast.error("فشل ربط GitHub: " + err.message);
+      });
+    }
+  }, []);
+
+  const handleGithubExport = async (mode: "new" | "existing", repoName?: string) => {
+    if (!githubToken || files.length === 0) return;
+    setGithubExporting(true);
+
+    try {
+      let repoFullName: string;
+
+      if (mode === "new") {
+        const name = repoName || projectTitle.replace(/\s+/g, "-").toLowerCase();
+        const { repo } = await githubExportAction("create_repo", { repo_name: name }, githubToken);
+        repoFullName = repo.full_name;
+        // Wait for GitHub to init the repo
+        await new Promise((r) => setTimeout(r, 2000));
+      } else {
+        repoFullName = repoName!;
+      }
+
+      const vfsFiles = files.map((f) => ({
+        path: f.name,
+        content: f.content,
+        language: f.language,
+      }));
+
+      await githubExportAction("push_files", { repo_full_name: repoFullName, files: vfsFiles }, githubToken);
+      toast.success("تم تصدير المشروع لـ GitHub بنجاح! ⚡");
+      window.open(`https://github.com/${repoFullName}`, "_blank");
+      setShowGithubExport(false);
+    } catch (err: any) {
+      toast.error(err.message || "فشل التصدير");
+    } finally {
+      setGithubExporting(false);
+    }
+  };
+
+  const handleConnectGithub = async () => {
+    try {
+      const { url } = await githubExportAction("get_auth_url");
+      window.location.href = url;
+    } catch (err: any) {
+      toast.error("فشل الاتصال بـ GitHub: " + err.message);
+    }
   };
 
   // ---- Chat Panel Content ----
@@ -734,7 +851,17 @@ export default function BuilderPage() {
             </button>
           </div>
           {files.length > 0 && (
-            <span className="text-xs text-muted-foreground mr-2">{files.length} ملفات</span>
+            <>
+              <span className="text-xs text-muted-foreground mr-2">{files.length} ملفات</span>
+              <button
+                onClick={() => githubToken ? setShowGithubExport(true) : handleConnectGithub()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-sm text-foreground hover:bg-muted transition-colors"
+                title="تصدير لـ GitHub"
+              >
+                <Github className="h-4 w-4" />
+                <span className="hidden sm:inline">تصدير</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -810,6 +937,77 @@ export default function BuilderPage() {
           )}
         </ResizablePanelGroup>
       </div>
+
+      {/* GitHub Export Modal */}
+      {showGithubExport && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => !githubExporting && setShowGithubExport(false)}>
+          <div className="bg-card border border-border rounded-2xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center">
+                <Github className="h-5 w-5 text-foreground" />
+              </div>
+              <div>
+                <h3 className="font-bold text-foreground">تصدير لـ GitHub</h3>
+                <p className="text-xs text-muted-foreground">اختر طريقة التصدير</p>
+              </div>
+            </div>
+
+            {githubExporting ? (
+              <div className="flex flex-col items-center gap-3 py-8">
+                <Loader2 className="h-8 w-8 text-primary animate-spin" />
+                <p className="text-sm text-muted-foreground">جاري تصدير المشروع...</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <button
+                  onClick={() => handleGithubExport("new")}
+                  className="w-full flex items-center gap-3 p-4 rounded-xl border border-border bg-secondary hover:bg-muted transition-colors text-right"
+                >
+                  <Plus className="h-5 w-5 text-primary shrink-0" />
+                  <div>
+                    <p className="font-bold text-sm text-foreground">ريبو جديد</p>
+                    <p className="text-xs text-muted-foreground">إنشاء ريبو جديد باسم المشروع</p>
+                  </div>
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      const { repos } = await githubExportAction("list_repos", {}, githubToken!);
+                      const repoName = prompt("اختر اسم الريبو:\n" + repos.map((r: any) => r.full_name).join("\n"));
+                      if (repoName) handleGithubExport("existing", repoName);
+                    } catch (err: any) {
+                      toast.error(err.message);
+                    }
+                  }}
+                  className="w-full flex items-center gap-3 p-4 rounded-xl border border-border bg-secondary hover:bg-muted transition-colors text-right"
+                >
+                  <ExternalLink className="h-5 w-5 text-accent shrink-0" />
+                  <div>
+                    <p className="font-bold text-sm text-foreground">ريبو موجود</p>
+                    <p className="text-xs text-muted-foreground">دفع الملفات لريبو موجود</p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Review Status Badge */}
+      {reviewStatus && (
+        <div className="fixed bottom-4 left-4 z-40 animate-slide-up">
+          <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${
+            reviewStatus === "reviewing" ? "bg-accent/10 border-accent/30 text-accent" :
+            reviewStatus === "fixing" ? "bg-orange-500/10 border-orange-500/30 text-orange-400" :
+            reviewStatus === "approved" ? "bg-green-500/10 border-green-500/30 text-green-400" :
+            "bg-secondary border-border text-muted-foreground"
+          }`}>
+            {reviewStatus === "reviewing" && <><Loader2 className="h-4 w-4 animate-spin" /> المدير يراجع...</>}
+            {reviewStatus === "fixing" && <><AlertCircle className="h-4 w-4" /> جاري الإصلاح...</>}
+            {reviewStatus === "approved" && <><CheckCircle2 className="h-4 w-4" /> تمت المراجعة ✅</>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

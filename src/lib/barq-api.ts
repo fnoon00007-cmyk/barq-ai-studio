@@ -172,6 +172,65 @@ export async function streamBarqBuilder(
   await processSSEStream(resp, callbacks, signal);
 }
 
+/** Review generated files with Gemini reviewer */
+export interface ReviewResult {
+  status: "approved" | "needs_fix";
+  summary_ar: string;
+  issues: { file: string; issue: string; fix_instruction: string }[];
+  fix_prompt?: string;
+}
+
+export async function reviewBuild(
+  buildPrompt: string,
+  files: { path: string; content: string; language: string }[]
+): Promise<ReviewResult> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-reviewer`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({ build_prompt: buildPrompt, files }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: "فشل المراجعة" }));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+/** GitHub Export API */
+export async function githubExportAction(
+  action: string,
+  params: Record<string, any> = {},
+  githubToken?: string
+): Promise<any> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/github-export`;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+  };
+  if (githubToken) headers["x-github-token"] = githubToken;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ action, ...params }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: "فشل العملية" }));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
 /** @deprecated Use streamBarqPlanner + streamBarqBuilder instead */
 export async function streamBarqAI(
   messages: { role: string; content: string }[],
