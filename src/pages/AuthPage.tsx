@@ -62,13 +62,35 @@ export default function AuthPage() {
   const handleGoogleSignIn = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: "https://barqai.site/auth",
-        },
-      });
-      if (error) throw error;
+      const isCustomDomain =
+        !window.location.hostname.includes("lovable.app") &&
+        !window.location.hostname.includes("lovableproject.com");
+
+      if (isCustomDomain) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: "https://barqai.site/auth",
+            skipBrowserRedirect: true,
+          },
+        });
+        if (error) throw error;
+        if (data?.url) {
+          const oauthUrl = new URL(data.url);
+          if (oauthUrl.hostname !== "accounts.google.com" && !oauthUrl.hostname.endsWith(".supabase.co")) {
+            throw new Error("Invalid OAuth redirect URL");
+          }
+          window.location.href = data.url;
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: `${window.location.origin}/auth`,
+          },
+        });
+        if (error) throw error;
+      }
     } catch (err: any) {
       toast.error(err.message || "حدث خطأ في تسجيل الدخول بحساب Google");
       setLoading(false);
