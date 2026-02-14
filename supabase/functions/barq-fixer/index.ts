@@ -84,68 +84,98 @@ serve(async (req) => {
     if (authResult instanceof Response) return authResult;
 
     const { errorMessage, componentStack, vfsContext } = await req.json();
-    const geminiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!geminiKey) throw new Error("GEMINI_API_KEY is not configured");
 
-    const geminiRequestBody = JSON.stringify({
-      model: "gemini-2.5-flash",
-      messages: [
-        { role: "system", content: FIXER_SYSTEM_PROMPT },
-        { role: "user", content: "رسالة الخطأ: " + errorMessage + "\n\nComponent Stack:\n" + componentStack + "\n\nسياق الملفات الحالية (VFS Context):\n" + JSON.stringify(vfsContext, null, 2) + "\n\nاقترح إصلاحات باستخدام suggest_vfs_fixes." },
-      ],
-      stream: true,
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "suggest_vfs_fixes",
-            description: "تقترح مجموعة من عمليات نظام الملفات الافتراضي (VFS) لإصلاح خطأ في الكود.",
-            parameters: {
-              type: "object",
-              properties: {
-                operations: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      path: { type: "string", description: "مسار الملف" },
-                      action: { type: "string", enum: ["create", "update", "delete"], description: "نوع العملية" },
-                      content: { type: "string", description: "محتوى الملف (مطلوب لـ create و update)" },
-                    },
-                    required: ["path", "action"],
+    const geminiKeys = [
+      Deno.env.get("GEMINI_API_KEY"),
+      Deno.env.get("GEMINI_API_KEY_2"),
+    ].filter(Boolean) as string[];
+
+    const groqKeys = [
+      Deno.env.get("GROQ_API_KEY"),
+      Deno.env.get("GROQ_API_KEY_2"),
+      Deno.env.get("GROQ_API_KEY_3"),
+    ].filter(Boolean) as string[];
+
+    if (geminiKeys.length === 0 && groqKeys.length === 0) {
+      throw new Error("No AI API keys configured");
+    }
+
+    const aiMessages = [
+      { role: "system", content: FIXER_SYSTEM_PROMPT },
+      { role: "user", content: "رسالة الخطأ: " + errorMessage + "\n\nComponent Stack:\n" + componentStack + "\n\nسياق الملفات الحالية (VFS Context):\n" + JSON.stringify(vfsContext, null, 2) + "\n\nاقترح إصلاحات باستخدام suggest_vfs_fixes." },
+    ];
+
+    const toolsDef = [
+      {
+        type: "function",
+        function: {
+          name: "suggest_vfs_fixes",
+          description: "تقترح مجموعة من عمليات نظام الملفات الافتراضي (VFS) لإصلاح خطأ في الكود.",
+          parameters: {
+            type: "object",
+            properties: {
+              operations: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string", description: "مسار الملف" },
+                    action: { type: "string", enum: ["create", "update", "delete"], description: "نوع العملية" },
+                    content: { type: "string", description: "محتوى الملف (مطلوب لـ create و update)" },
                   },
-                },
-                summary_ar: {
-                  type: "string",
-                  description: "ملخص عربي مختصر للمستخدم يوضح ما تم اقتراحه من إصلاحات.",
+                  required: ["path", "action"],
                 },
               },
-              required: ["operations", "summary_ar"],
+              summary_ar: {
+                type: "string",
+                description: "ملخص عربي مختصر للمستخدم يوضح ما تم اقتراحه من إصلاحات.",
+              },
             },
+            required: ["operations", "summary_ar"],
           },
         },
-      ],
-    });
+      },
+    ];
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${geminiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: geminiRequestBody,
-      }
-    );
+    let response: Response | null = null;
 
-    if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({ error: "An unknown error occurred" }));
-        console.error("Gemini API Error:", errorBody);
-        return new Response(JSON.stringify({ error: errorBody.error?.message || "حدث خطأ في الاتصال بالذكاء الاصطناعي" }), {
-            status: response.status,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Try Gemini keys first
+    for (const key of geminiKeys) {
+      const res = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "gemini-2.5-flash", messages: aiMessages, stream: true, tools: toolsDef }),
+        }
+      );
+      if (res.ok) { response = res; console.log("Gemini fixer succeeded"); break; }
+      if (res.status === 429) { console.warn("Gemini fixer key rate-limited, trying next..."); continue; }
+      console.error("Gemini fixer error:", res.status);
+      continue;
+    }
+
+    // Fallback to Groq
+    if (!response) {
+      console.warn("All Gemini keys exhausted for fixer, falling back to Groq...");
+      for (const gKey of groqKeys) {
+        const gRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${gKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: aiMessages, stream: true, tools: toolsDef }),
         });
+        if (gRes.ok) { response = gRes; console.log("Groq fixer fallback succeeded"); break; }
+        if (gRes.status === 429) { console.warn("Groq fixer key rate-limited, trying next..."); continue; }
+        console.error("Groq fixer error:", gRes.status);
+        continue;
+      }
+    }
+
+    if (!response) {
+      return new Response(
+        JSON.stringify({ error: "جميع مفاتيح الذكاء الاصطناعي وصلت للحد الأقصى، حاول بعد شوي ⚡" }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const encoder = new TextEncoder();
