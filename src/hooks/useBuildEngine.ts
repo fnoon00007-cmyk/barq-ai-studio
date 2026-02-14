@@ -71,7 +71,7 @@ export function useBuildEngine({
 
       try {
         await streamBarqBuilder(
-          prompt,
+          { buildPrompt: prompt, projectId: null, dependencyGraph: null, existingFiles: files.map(f => ({ path: f.name || (f as any).path, content: f.content })) },
           {
             onThinkingStart: () => addLogEntry("read", "تحليل وتخطيط البناء..."),
             onThinkingStep: (step) => {
@@ -121,7 +121,9 @@ export function useBuildEngine({
                       const fixPrompt = `${prompt}\n\n## FIX INSTRUCTIONS:\n${reviewResult.fix_prompt}\n\n## EXISTING FILES:\n${pendingOps.map(f => `- ${f.path}`).join("\n")}\n\nFix the issues and regenerate ONLY the affected files.`;
                       
                       const fixOps: typeof pendingOps = [];
-                      await streamBarqBuilder(fixPrompt, {
+                      await streamBarqBuilder(
+                        { buildPrompt: fixPrompt, projectId: null, dependencyGraph: null, existingFiles: pendingOps.map(f => ({ path: f.path, content: f.content })) },
+                        {
                         onFileStart: (path) => addLogEntry("update", `إصلاح ${path}...`),
                         onFileDone: (path, content) => {
                           fixOps.push({ path, action: "update", content, language: path.endsWith(".css") ? "css" : "tsx" });
@@ -151,8 +153,7 @@ export function useBuildEngine({
               updateMessage(assistantMsgId, { isStreaming: false });
             },
           },
-          abortController.signal,
-          files.length > 0 ? files.map((f) => ({ path: f.name || (f as any).path, content: f.content })) : undefined
+          abortController.signal
         );
         saveMessage("assistant", assistantContent);
         if (pendingOps.length > 0) setTimeout(() => saveProject(), 500);
@@ -224,7 +225,7 @@ export function useBuildEngine({
 
       try {
         await streamBarqPlanner(
-          conversationHistory,
+          { conversationHistory: conversationHistory, projectId: null, vfsContext: files.map(f => ({ path: f.name || (f as any).path, type: 'file' })) },
           {
             onMessageDelta: (text) => {
               assistantContent += text;

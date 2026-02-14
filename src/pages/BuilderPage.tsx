@@ -107,16 +107,15 @@ export default function BuilderPage() {
 
   // Update project title from build engine
   useEffect(() => {
-    if (engine.buildProjectName) {
-      setProjectTitle(engine.buildProjectName);
-      // Also save the new project name to DB immediately
+    if (engine.state.buildProjectName) {
+      setProjectTitle(engine.state.buildProjectName);
       if (currentProjectId) {
-        supabase.from("projects").update({ title: engine.buildProjectName }).eq("id", currentProjectId).then(({ error }) => {
+        supabase.from("projects").update({ title: engine.state.buildProjectName }).eq("id", currentProjectId).then(({ error }) => {
           if (error) console.error("Failed to update project title in DB:", error);
         });
       }
     }
-  }, [engine.buildProjectName, currentProjectId]);
+  }, [engine.state.buildProjectName, currentProjectId]);
 
   // Handle prompt from landing page
   useEffect(() => {
@@ -181,7 +180,13 @@ export default function BuilderPage() {
 
           {vfs.files.length > 0 && (
             <button
-              onClick={engine.saveProject} // This now saves project metadata
+              onClick={async () => {
+                if (!userId || !currentProjectId) return;
+                try {
+                  await supabase.from("projects").update({ title: projectTitle, updated_at: new Date().toISOString() }).eq("id", currentProjectId);
+                  toast.success("تم حفظ بيانات المشروع ⚡");
+                } catch (error: any) { toast.error(`فشل الحفظ: ${error.message}`); }
+              }}
               className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
               title="حفظ المشروع"
             >
@@ -299,7 +304,6 @@ export default function BuilderPage() {
                         steps={msg.thinkingSteps || []}
                         affectedFiles={msg.affectedFiles}
                         isComplete={!msg.isStreaming}
-                        dependencyGraph={engine.state.dependencyGraph}
                         dependencyGraph={engine.state.dependencyGraph}
                       />
                     ) : null}
@@ -422,7 +426,10 @@ export default function BuilderPage() {
                   type="text"
                   value={projectTitle}
                   onChange={(e) => setProjectTitle(e.target.value)}
-                  onBlur={engine.saveProject} // Save project title on blur
+                  onBlur={async () => {
+                    if (!userId || !currentProjectId) return;
+                    await supabase.from("projects").update({ title: projectTitle }).eq("id", currentProjectId);
+                  }}
                   className="mt-1 block w-full rounded-md border-border bg-background shadow-sm p-2 text-foreground"
                 />
               </div>
@@ -438,7 +445,13 @@ export default function BuilderPage() {
               <div className="border-t border-border pt-4 mt-4">
                 <h4 className="text-md font-bold mb-2">تصدير GitHub</h4>
                 <button
-                  onClick={github.openModal}
+                  onClick={() => {
+                    if (github.githubToken) {
+                      github.setShowGithubExport(true);
+                    } else {
+                      github.handleConnectGithub();
+                    }
+                  }}
                   className="w-full bg-gray-800 text-white px-4 py-2 rounded-md flex items-center justify-center gap-2 hover:bg-gray-700 transition-colors"
                 >
                   <Github className="h-5 w-5" />
@@ -464,7 +477,6 @@ export default function BuilderPage() {
             <PreviewPanel 
               files={vfs.files} 
               device={previewDevice} 
-              onPreviewError={(errorMessage, componentStack) => engine.handleFixError(errorMessage, componentStack)}
             />
             <div className="flex-shrink-0 border-t border-border bg-card p-2 flex items-center justify-center gap-2">
               <button
@@ -533,13 +545,11 @@ export default function BuilderPage() {
       )}
 
       {/* GitHub Export Modal */}
-      {github.isModalOpen && (
+      {github.showGithubExport && github.githubToken && (
         <GitHubExportModal
-          onClose={github.closeModal}
-          onExport={github.handleExport}
-          isLoading={github.isLoading}
-          authUrl={github.authUrl}
-          isAuthenticated={github.isAuthenticated}
+          open={github.showGithubExport}
+          onClose={() => github.setShowGithubExport(false)}
+          githubToken={github.githubToken}
           files={vfs.files}
           projectTitle={projectTitle}
         />

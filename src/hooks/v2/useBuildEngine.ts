@@ -29,7 +29,7 @@ interface UseBuildEngineProps {
   projectId: string | null;
   files: VFSFile[];
   messages: ChatMessage[];
-  applyVFSOperations: (ops: VFSOperation[]) => Promise<void>;
+  applyVFSOperations: (ops: VFSOperation[], message?: string) => Promise<void>;
   addMessage: (msg: ChatMessage) => void;
   updateMessage: (id: string, updates: Partial<ChatMessage>) => void;
   saveMessage: (message: Omit<ChatMessage, "id" | "timestamp">) => Promise<void>;
@@ -138,16 +138,14 @@ export function useBuildEngine({
         { 
           conversationHistory: [...conversationHistory, { role: "user", content }], 
           projectId,
-          vfsContext // New: Gemini now knows what files already exist
+          vfsContext
         },
-        token,
         {
           onMessageDelta: (text) => {
             assistantContent += text;
             updateMessage(assistantMsgId, { content: assistantContent });
           },
           onBuildReady: (prompt, summary, projectName, dependencyGraph) => {
-            // New: dependencyGraph helps in modular React generation
             dispatch({ 
               type: "SET_BUILD_PROMPT", 
               payload: { prompt, projectName, dependencyGraph } 
@@ -160,11 +158,11 @@ export function useBuildEngine({
           onDone: async () => {
             updateMessage(assistantMsgId, { isStreaming: false });
             saveMessage({ role: "assistant", content: assistantContent });
-            // If this was a fix attempt, clear the fix suggestion
             if (state.fixSuggestion) {
               dispatch({ type: "SET_FIX_SUGGESTION", payload: null });
             }
-          },     onError: (error) => {
+          },
+          onError: (error) => {
             throw new Error(error);
           },
         },
@@ -208,8 +206,7 @@ export function useBuildEngine({
 
     abortControllerRef.current = new AbortController();
     
-    // Use a Map for efficient parallel chunk handling
-    const fileBuffers = new Map<string, { content: string, action: 'create' | 'update' | 'delete' }>();
+    const fileBuffers = new Map<string, { content: string, action: VFSOperation['action'] }>();
 
     try {
       const token = await getAuthToken();
@@ -233,7 +230,7 @@ export function useBuildEngine({
               affectedFiles.push(path);
               updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
             }
-            fileBuffers.set(path, { content: "", action: action || 'update' });
+            fileBuffers.set(path, { content: "", action: (action as VFSOperation['action']) || 'create' });
           },
           onFileChunk: (path, chunk) => {
             const buffer = fileBuffers.get(path);
@@ -362,13 +359,5 @@ export function useBuildEngine({
     handleFixError,
     handleApplyFix,
     handleRejectFix,
-  };
-}
-
-  return {
-    state,
-    handleAbort,
-    handleSendMessage,
-    handleStartBuild,
   };
 }
