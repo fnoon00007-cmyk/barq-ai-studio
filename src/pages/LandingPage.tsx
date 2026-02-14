@@ -168,12 +168,22 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="relative z-10 border-t border-border py-8 px-4 text-center">
-        <p className="text-sm text-muted-foreground">
-          © 2026{" "}
-          <a href="https://barqai.site" className="text-primary hover:underline">Barq Ai</a>
-          {" "}- جميع الحقوق محفوظة ⚡
-        </p>
+      <footer className="relative z-10 border-t border-border py-8 px-4">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+          <p className="text-sm text-muted-foreground">
+            © 2026{" "}
+            <a href="https://barqai.site" className="text-primary hover:underline">Barq Ai</a>
+            {" "}- جميع الحقوق محفوظة ⚡
+          </p>
+          <div className="flex items-center gap-4">
+            <button onClick={() => navigate("/privacy")} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              سياسة الخصوصية
+            </button>
+            <button onClick={() => navigate("/terms")} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+              شروط الاستخدام
+            </button>
+          </div>
+        </div>
       </footer>
     </div>
   );

@@ -12,6 +12,8 @@ import BuilderPage from "./pages/BuilderPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import BrandSettingsPage from "./pages/BrandSettingsPage";
 import PricingPage from "./pages/PricingPage";
+import PrivacyPage from "./pages/PrivacyPage";
+import TermsPage from "./pages/TermsPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -52,6 +54,8 @@ const App = () => (
           <Route path="/" element={<LandingPage />} />
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
           
           {/* Protected routes */}
           <Route element={<AuthGuard />}>
