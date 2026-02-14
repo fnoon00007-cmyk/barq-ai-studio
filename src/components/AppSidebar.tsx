@@ -1,4 +1,5 @@
-import { Zap, FolderOpen, Hammer, Palette, CreditCard, LogOut, User } from "lucide-react";
+import { FolderOpen, Hammer, Palette, CreditCard, LogOut } from "lucide-react";
+import BarqLogo from "@/components/BarqLogo";
 import { NavLink } from "@/components/NavLink";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -36,9 +37,7 @@ export function AppSidebar() {
     <Sidebar side="right">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center animate-pulse-glow">
-            <Zap className="h-5 w-5 text-accent" />
-          </div>
+          <BarqLogo size={40} className="animate-pulse-glow" />
           <div>
             <h1 className="text-sm font-bold text-sidebar-foreground">برق Ai</h1>
             <p className="text-[10px] text-muted-foreground">منشئ المواقع الذكي ⚡</p>

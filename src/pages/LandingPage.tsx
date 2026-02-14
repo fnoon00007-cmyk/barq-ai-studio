@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Zap, Globe, Palette, Cpu, ArrowLeft, Code, Sparkles, Send } from "lucide-react";
+import { Globe, Palette, Cpu, Code, Sparkles, Send } from "lucide-react";
+import BarqLogo from "@/components/BarqLogo";
 import { useNavigate } from "react-router-dom";
 
 const features = [
@@ -45,9 +46,7 @@ export default function LandingPage() {
       <nav className="relative z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl sticky top-0">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-16">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-primary/15 flex items-center justify-center">
-              <Zap className="h-5 w-5 text-primary" />
-            </div>
+            <BarqLogo size={36} />
             <span className="font-bold text-lg text-foreground">برق Ai</span>
           </div>
           <div className="hidden sm:flex items-center gap-6">
@@ -76,7 +75,7 @@ export default function LandingPage() {
       <section className="relative z-10 pt-20 sm:pt-32 pb-16 px-4">
         <div className="max-w-3xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 text-primary text-sm font-bold mb-8">
-            <Zap className="h-4 w-4" />
+            <BarqLogo size={20} />
             أول منشئ مواقع ذكي بالعربي
           </div>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-foreground mb-6 leading-tight">
@@ -155,7 +154,7 @@ export default function LandingPage() {
       {/* CTA */}
       <section className="relative z-10 py-20 px-4">
         <div className="max-w-2xl mx-auto text-center bg-card border border-border rounded-3xl p-12">
-          <Zap className="h-12 w-12 text-accent mx-auto mb-5" />
+          <div className="mx-auto mb-5"><BarqLogo size={48} /></div>
           <h2 className="text-3xl font-bold text-foreground mb-4">جاهز تبدأ؟</h2>
           <p className="text-muted-foreground mb-8 text-lg">سجّل الآن وابنِ أول موقع لك بالمجان</p>
           <button
