@@ -124,91 +124,107 @@ serve(async (req) => {
       fullPrompt += `\n\n## EXISTING FILES (modify these, don't rebuild from scratch):\n${filesContext}`;
     }
 
-    const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
-    if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
+    const groqKeys = [
+      Deno.env.get("GROQ_API_KEY"),
+      Deno.env.get("GROQ_API_KEY_2"),
+    ].filter(Boolean) as string[];
+    if (groqKeys.length === 0) throw new Error("GROQ_API_KEY is not configured");
 
-    const response = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            { role: "system", content: BUILDER_SYSTEM_PROMPT },
-            { role: "user", content: fullPrompt },
-          ],
-          stream: true,
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "generate_website",
-                description:
-                  "Generate the website files based on the build prompt. Create at least 6 separate files.",
-                parameters: {
+    const requestBody = JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: BUILDER_SYSTEM_PROMPT },
+        { role: "user", content: fullPrompt },
+      ],
+      stream: true,
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "generate_website",
+            description:
+              "Generate the website files based on the build prompt. Create at least 6 separate files.",
+            parameters: {
+              type: "object",
+              properties: {
+                thought_process: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "4-6 thinking steps in Arabic describing the build plan",
+                },
+                design_personality: {
+                  type: "string",
+                  enum: ["formal", "creative", "minimalist", "bold"],
+                },
+                vfs_operations: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      path: { type: "string" },
+                      action: { type: "string", enum: ["create", "update"] },
+                      content: { type: "string" },
+                      language: { type: "string", enum: ["tsx", "css", "html"] },
+                    },
+                    required: ["path", "action", "content", "language"],
+                  },
+                },
+                user_message: { type: "string" },
+                css_variables: {
                   type: "object",
                   properties: {
-                    thought_process: {
-                      type: "array",
-                      items: { type: "string" },
-                      description: "4-6 thinking steps in Arabic describing the build plan",
-                    },
-                    design_personality: {
-                      type: "string",
-                      enum: ["formal", "creative", "minimalist", "bold"],
-                    },
-                    vfs_operations: {
-                      type: "array",
-                      items: {
-                        type: "object",
-                        properties: {
-                          path: { type: "string" },
-                          action: { type: "string", enum: ["create", "update"] },
-                          content: { type: "string" },
-                          language: { type: "string", enum: ["tsx", "css", "html"] },
-                        },
-                        required: ["path", "action", "content", "language"],
-                      },
-                    },
-                    user_message: { type: "string" },
-                    css_variables: {
-                      type: "object",
-                      properties: {
-                        primary_color: { type: "string" },
-                        secondary_color: { type: "string" },
-                        border_radius: { type: "string" },
-                        font_style: { type: "string" },
-                      },
-                    },
+                    primary_color: { type: "string" },
+                    secondary_color: { type: "string" },
+                    border_radius: { type: "string" },
+                    font_style: { type: "string" },
                   },
-                  required: ["thought_process", "design_personality", "vfs_operations", "user_message"],
                 },
               },
+              required: ["thought_process", "design_personality", "vfs_operations", "user_message"],
             },
-          ],
-          tool_choice: { type: "function", function: { name: "generate_website" } },
-        }),
-      }
-    );
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "generate_website" } },
+    });
 
-    if (!response.ok) {
-      const status = response.status;
+    let response: Response | null = null;
+    for (const key of groqKeys) {
+      const res = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: requestBody,
+        }
+      );
+      if (res.ok) {
+        response = res;
+        break;
+      }
+      if (res.status === 429) {
+        console.warn("Groq key rate-limited, trying fallback...");
+        continue;
+      }
       const errBody = {
-        error:
-          status === 429
-            ? "تم تجاوز الحد المسموح، حاول لاحقاً."
-            : status === 402
-            ? "يرجى إضافة رصيد لحسابك."
-            : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
+        error: res.status === 402
+          ? "يرجى إضافة رصيد لحسابك."
+          : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
       };
       return new Response(JSON.stringify(errBody), {
-        status: status >= 400 && status < 500 ? status : 500,
+        status: res.status >= 400 && res.status < 500 ? res.status : 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (!response) {
+      return new Response(
+        JSON.stringify({ error: "تم تجاوز الحد المسموح لجميع المفاتيح، حاول لاحقاً." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const encoder = new TextEncoder();
