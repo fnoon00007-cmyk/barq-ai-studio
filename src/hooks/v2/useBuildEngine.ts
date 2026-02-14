@@ -130,8 +130,13 @@ export function useBuildEngine({
       const token = await getAuthToken();
       if (!token) throw new Error("Authentication failed");
 
-      // Context-Aware Payload: Include current VFS structure (names only for planning)
-      const vfsContext = files.map(f => ({ path: f.name, type: 'file' }));
+      // Context-Aware Payload: Include file names AND truncated content for modification planning
+      const vfsContext = files.map(f => ({ 
+        path: f.name, 
+        type: 'file',
+        // Send first 500 chars of content so planner understands existing structure
+        preview: f.content.slice(0, 500) + (f.content.length > 500 ? '...' : '')
+      }));
       const conversationHistory = messages.map(({ role, content }) => ({ role, content }));
 
       await streamBarqPlanner(
@@ -182,7 +187,7 @@ export function useBuildEngine({
   // --- Phase 2: Iterative Building (Groq Llama 3.3 70B) ---
   // Now supports parallel execution and targeted file updates (Diffs).
   const handleStartBuild = useCallback(async () => {
-    if (!state.buildPrompt || !userId || !projectId) return;
+    if (!state.buildPrompt || !userId) return;
 
     dispatch({ type: "SET_STATUS", payload: { isBuilding: true, isThinking: true, error: null } });
     const buildPromptContent = state.buildPrompt;
@@ -236,7 +241,26 @@ export function useBuildEngine({
             const buffer = fileBuffers.get(path);
             if (buffer) {
               buffer.content += chunk;
-              // Optional: Real-time VFS preview update could be triggered here for ultra-low latency
+            } else {
+              // Handle case where file_start wasn't received
+              fileBuffers.set(path, { content: chunk, action: 'create' });
+              if (!affectedFiles.includes(path)) {
+                affectedFiles.push(path);
+                updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
+              }
+            }
+          },
+          onFileDone: (path, content) => {
+            // file_done carries the full content - use it as the final source of truth
+            const existing = fileBuffers.get(path);
+            if (existing) {
+              existing.content = content;
+            } else {
+              fileBuffers.set(path, { content, action: 'create' });
+              if (!affectedFiles.includes(path)) {
+                affectedFiles.push(path);
+                updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
+              }
             }
           },
           onDone: async () => {
