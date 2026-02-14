@@ -48,7 +48,39 @@ function sseEvent(data: Record<string, unknown>): string {
 }
 
 async function authenticateUser(req: Request): Promise<{ userId: string } | Response> {
-  // ... (Authentication logic remains the same)
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: "غير مصرح — يرجى تسجيل الدخول" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  const token = authHeader.replace("Bearer ", "");
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return new Response(JSON.stringify({ error: "جلسة غير صالحة — يرجى تسجيل الدخول مجدداً" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const { data: allowed } = await supabase.rpc("check_and_increment_usage", {
+    p_user_id: user.id,
+    p_function_type: "planner",
+    p_daily_limit: DAILY_LIMIT,
+  });
+
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: "تم تجاوز الحد اليومي للتخطيط. حاول بكرة! ⚡" }), {
+      status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  return { userId: user.id };
 }
 
 serve(async (req) => {
