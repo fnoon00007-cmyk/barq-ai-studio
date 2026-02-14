@@ -103,7 +103,7 @@ async function processSSEStream(
               callbacks.onMessageDelta?.(parsed.content);
               break;
             case "build_ready":
-              callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name, parsed.dependencyGraph);
+              callbacks.onBuildReady?.(parsed.prompt || parsed.build_prompt, parsed.summary, parsed.projectName || parsed.project_name, parsed.dependencyGraph);
               break;
             case "fix_ready":
               callbacks.onFixReady?.(parsed.operations, parsed.summary);
@@ -129,7 +129,7 @@ async function processSSEStream(
         try {
           const parsed = JSON.parse(jsonStr);
           if (parsed.event === "message_delta") callbacks.onMessageDelta?.(parsed.content);
-          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name, parsed.dependencyGraph);
+          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.prompt || parsed.build_prompt, parsed.summary, parsed.projectName || parsed.project_name, parsed.dependencyGraph);
           if (parsed.event === "done") {
             callbacks.onDone?.();
             return;
