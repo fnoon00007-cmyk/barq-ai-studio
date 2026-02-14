@@ -183,7 +183,7 @@ export async function streamBarqBuilder(
     build_prompt: payload.buildPrompt,
     projectId: payload.projectId,
     dependencyGraph: payload.dependencyGraph,
-    existingFiles: payload.existingFiles,
+    existing_files: payload.existingFiles,
   };
 
   const resp = await fetch(url, {
