@@ -61,6 +61,8 @@ const App = () => (
           <Route element={<AuthGuard />}>
             <Route path="/builder" element={<BuilderPage />} />
             <Route path="/builder/:projectId" element={<BuilderPage />} />
+            <Route path="/auth/github/callback" element={<BuilderPage />} />
+            <Route path="/builder/:projectId" element={<BuilderPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/settings" element={<BrandSettingsPage />} />
           </Route>
