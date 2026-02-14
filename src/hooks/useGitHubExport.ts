@@ -7,28 +7,42 @@ export function useGitHubExport(files: VFSFile[], projectTitle: string) {
   const [githubToken, setGithubToken] = useState<string | null>(null);
   const [showGithubExport, setShowGithubExport] = useState(false);
   const [githubExporting, setGithubExporting] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
 
   // GitHub OAuth callback handler
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get("code");
     if (code && !githubToken) {
-      githubExportAction("exchange_code", { code }).then((data) => {
-        if (data.access_token) {
-          setGithubToken(data.access_token);
-          setShowGithubExport(true);
-          toast.success("تم ربط GitHub بنجاح! ⚡");
-          window.history.replaceState({}, "", window.location.pathname);
-        }
-      }).catch((err) => {
-        toast.error("فشل ربط GitHub: " + err.message);
-      });
+      setGithubError(null);
+      githubExportAction("exchange_code", { code })
+        .then((data) => {
+          if (data.access_token) {
+            setGithubToken(data.access_token);
+            setShowGithubExport(true);
+            toast.success("تم ربط GitHub بنجاح! ⚡");
+            window.history.replaceState({}, "", window.location.pathname);
+          } else {
+            const msg = "لم يتم الحصول على رمز الوصول من GitHub";
+            setGithubError(msg);
+            toast.error(msg);
+          }
+        })
+        .catch((err) => {
+          console.error("GitHub exchange_code error:", err);
+          const msg = err.message?.includes("Failed to fetch")
+            ? "فشل الاتصال بالخادم. تأكد أن الموقع متصل بالباك إند بشكل صحيح."
+            : `فشل ربط GitHub: ${err.message}`;
+          setGithubError(msg);
+          toast.error(msg);
+        });
     }
   }, []);
 
   const handleGithubExport = useCallback(async (mode: "new" | "existing", repoName?: string) => {
     if (!githubToken || files.length === 0) return;
     setGithubExporting(true);
+    setGithubError(null);
 
     try {
       let repoFullName: string;
@@ -53,18 +67,26 @@ export function useGitHubExport(files: VFSFile[], projectTitle: string) {
       window.open(`https://github.com/${repoFullName}`, "_blank");
       setShowGithubExport(false);
     } catch (err: any) {
-      toast.error(err.message || "فشل التصدير");
+      const msg = err.message || "فشل التصدير";
+      setGithubError(msg);
+      toast.error(msg);
     } finally {
       setGithubExporting(false);
     }
   }, [githubToken, files, projectTitle]);
 
   const handleConnectGithub = useCallback(async () => {
+    setGithubError(null);
     try {
       const { url } = await githubExportAction("get_auth_url");
       window.location.href = url;
     } catch (err: any) {
-      toast.error("فشل الاتصال بـ GitHub: " + err.message);
+      console.error("GitHub get_auth_url error:", err);
+      const msg = err.message?.includes("Failed to fetch")
+        ? "فشل الاتصال بالخادم. تأكد أن إعدادات الباك إند صحيحة."
+        : `فشل الاتصال بـ GitHub: ${err.message}`;
+      setGithubError(msg);
+      toast.error(msg);
     }
   }, []);
 
@@ -73,6 +95,7 @@ export function useGitHubExport(files: VFSFile[], projectTitle: string) {
     showGithubExport,
     setShowGithubExport,
     githubExporting,
+    githubError,
     handleGithubExport,
     handleConnectGithub,
   };
