@@ -1,4 +1,4 @@
-import { ThinkingStep } from "@/hooks/useVFS";
+import { ThinkingStep } from "@/hooks/v2/useBuilderChat";
 import { Zap, Check, Loader2, Circle, ChevronDown, FileCode } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useState } from "react";
@@ -6,13 +6,14 @@ import { useState } from "react";
 interface ThinkingEngineProps {
   steps: ThinkingStep[];
   affectedFiles?: string[];
+  dependencyGraph?: any; // New: Dependency graph to display
   isComplete?: boolean;
 }
 
-export function ThinkingEngine({ steps, affectedFiles, isComplete }: ThinkingEngineProps) {
+export function ThinkingEngine({ steps, affectedFiles, dependencyGraph, isComplete }: ThinkingEngineProps) {
   const [open, setOpen] = useState(true);
 
-  if (steps.length === 0 && (!affectedFiles || affectedFiles.length === 0)) return null;
+  if (steps.length === 0 && (!affectedFiles || affectedFiles.length === 0) && !dependencyGraph) return null;
 
   const allDone = isComplete || steps.every((s) => s.status === "completed");
 
@@ -51,6 +52,22 @@ export function ThinkingEngine({ steps, affectedFiles, isComplete }: ThinkingEng
             </div>
           </div>
         )}
+        {dependencyGraph && dependencyGraph.nodes && dependencyGraph.nodes.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-border">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+              <FileCode className="h-3 w-3" />
+              <span>مخطط الاعتماديات ({dependencyGraph.nodes.length} مكون)</span>
+            </div>
+            <div className="flex flex-col gap-1">
+              {dependencyGraph.nodes.map((node: any) => (
+                <span key={node.id} className="text-[10px] px-2 py-0.5 rounded bg-secondary text-muted-foreground font-mono" dir="ltr">
+                  {node.id} ({node.action})
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
       </CollapsibleContent>
     </Collapsible>
   );

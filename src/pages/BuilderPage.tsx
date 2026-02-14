@@ -1,22 +1,25 @@
 import { useState, useEffect, useRef } from "react";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
-import { PreviewPanel } from "@/components/PreviewPanel";
+import { PreviewPanel } from "@/components/v2/PreviewPanel";
 import { GitHubExportModal } from "@/components/GitHubExportModal";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useBuilderProject } from "@/hooks/useBuilderProject";
-import { useBuilderChat } from "@/hooks/useBuilderChat";
-import { useBuildEngine } from "@/hooks/useBuildEngine";
+// import { useBuilderProject } from "@/hooks/useBuilderProject"; // Removed
+import { useBuilderChat } from "@/hooks/v2/useBuilderChat"; // Updated import path
+import { useBuildEngine } from "@/hooks/v2/useBuildEngine"; // Updated import path
+import { useVFS } from "@/hooks/v2/useVFS"; // New import
 import { useGitHubExport } from "@/hooks/useGitHubExport";
 import {
   Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft,
   LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor,
-  Github, Loader2, CheckCircle2, AlertCircle,
+  Github, Loader2, CheckCircle2, AlertCircle, Undo2, Redo2,
 } from "lucide-react";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 
 export default function BuilderPage() {
   const { projectId } = useParams();
@@ -30,43 +33,103 @@ export default function BuilderPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const promptSentRef = useRef(false);
 
-  // Extracted hooks
-  const project = useBuilderProject(projectId);
-  const chat = useBuilderChat(project.userId, project.currentProjectId);
+  // User state (moved from useBuilderProject)
+  const [userId, setUserId] = useState<string | null>(null);
+  const [projectTitle, setProjectTitle] = useState("مشروع جديد");
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId || null);
 
+  // Get user
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUserId(data.user?.id ?? null);
+    });
+  }, []);
+
+  // VFS hook
+  const vfs = useVFS({ projectId: currentProjectId });
+
+  // Chat hook
+  const chat = useBuilderChat({ userId, projectId: currentProjectId });
+
+  // Build Engine hook
   const engine = useBuildEngine({
-    addLogEntry: project.addLogEntry,
-    applyVFSOperations: project.applyVFSOperations,
-    saveMessage: chat.saveMessage,
-    saveProject: project.saveProject,
+    userId,
+    projectId: currentProjectId,
+    files: vfs.files,
+    messages: chat.messages,
+    applyVFSOperations: vfs.applyVFSOperations,
     addMessage: chat.addMessage,
     updateMessage: chat.updateMessage,
-    messages: chat.messages,
-    files: project.files,
-    setMobileView,
+    saveMessage: chat.saveMessage,
+    saveProject: async () => {
+      // The actual VFS persistence is handled by useVFS now.
+      // This saveProject is for project metadata like title.
+      if (!userId || !currentProjectId) return;
+      try {
+        await supabase
+          .from("projects")
+          .update({ title: projectTitle, updated_at: new Date().toISOString() })
+          .eq("id", currentProjectId);
+        toast.success("تم حفظ بيانات المشروع ⚡");
+      } catch (error: any) {
+        toast.error(`فشل حفظ بيانات المشروع: ${error.message}`);
+      }
+    },
+    getAuthToken: async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      return session?.access_token || null;
+    },
   });
 
-  const github = useGitHubExport(project.files, project.projectTitle);
+  // GitHub Export hook (now uses vfs.files directly)
+  const github = useGitHubExport(vfs.files, projectTitle);
+
+  // Load project title and ID on mount or projectId change
+  useEffect(() => {
+    if (!projectId) return;
+    setCurrentProjectId(projectId);
+    supabase
+      .from("projects")
+      .select("title")
+      .eq("id", projectId)
+      .single()
+      .then(({ data, error }) => {
+        if (error) {
+          toast.error(`فشل تحميل المشروع: ${error.message}`);
+          navigate("/projects"); // Redirect if project not found or error
+          return;
+        }
+        if (data) {
+          setProjectTitle(data.title || "مشروع جديد");
+        }
+      });
+  }, [projectId, navigate]);
 
   // Update project title from build engine
   useEffect(() => {
     if (engine.buildProjectName) {
-      project.setProjectTitle(engine.buildProjectName);
+      setProjectTitle(engine.buildProjectName);
+      // Also save the new project name to DB immediately
+      if (currentProjectId) {
+        supabase.from("projects").update({ title: engine.buildProjectName }).eq("id", currentProjectId).then(({ error }) => {
+          if (error) console.error("Failed to update project title in DB:", error);
+        });
+      }
     }
-  }, [engine.buildProjectName]);
+  }, [engine.buildProjectName, currentProjectId]);
 
   // Handle prompt from landing page
   useEffect(() => {
     if (promptSentRef.current) return;
     const prompt = searchParams.get("prompt");
-    if (prompt && project.userId && !chat.loadingMessages) {
+    if (prompt && userId && !chat.loadingMessages && !currentProjectId) { // Only for new projects
       promptSentRef.current = true;
       engine.handleSendMessage(prompt);
     }
-  }, [searchParams, project.userId, chat.loadingMessages]);
+  }, [searchParams, userId, chat.loadingMessages, currentProjectId]);
 
   const handleSubmit = () => {
-    if (!chat.input.trim() || engine.isThinking) return;
+    if (!chat.input.trim() || engine.state.isThinking) return;
     engine.handleSendMessage(chat.input.trim());
     chat.setInput("");
   };
@@ -76,6 +139,11 @@ export default function BuilderPage() {
       e.preventDefault();
       handleSubmit();
     }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/");
   };
 
   // ---- Chat Panel Content ----
@@ -88,14 +156,32 @@ export default function BuilderPage() {
             <Zap className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <h1 className="text-sm font-bold text-foreground">{project.projectTitle}</h1>
+            <h1 className="text-sm font-bold text-foreground">{projectTitle}</h1>
             <p className="text-[11px] text-muted-foreground">برق AI</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {project.files.length > 0 && (
+          {/* Undo/Redo Buttons */}
+          <button
+            onClick={vfs.undo}
+            disabled={!vfs.canUndo || vfs.loading}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+            title="تراجع"
+          >
+            <Undo2 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={vfs.redo}
+            disabled={!vfs.canRedo || vfs.loading}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+            title="إعادة"
+          >
+            <Redo2 className="h-4 w-4" />
+          </button>
+
+          {vfs.files.length > 0 && (
             <button
-              onClick={project.saveProject}
+              onClick={engine.saveProject} // This now saves project metadata
               className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
               title="حفظ المشروع"
             >
@@ -110,7 +196,7 @@ export default function BuilderPage() {
             <FolderOpen className="h-4 w-4" />
           </button>
           <button
-            onClick={project.handleLogout}
+            onClick={handleLogout}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             title="تسجيل خروج"
           >
@@ -144,8 +230,8 @@ export default function BuilderPage() {
         >
           <FileCode className="h-3.5 w-3.5" />
           الكود
-          {project.files.length > 0 && (
-            <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{project.files.length}</span>
+          {vfs.files.length > 0 && (
+            <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{vfs.files.length}</span>
           )}
         </button>
         <button
@@ -213,6 +299,8 @@ export default function BuilderPage() {
                         steps={msg.thinkingSteps || []}
                         affectedFiles={msg.affectedFiles}
                         isComplete={!msg.isStreaming}
+                        dependencyGraph={engine.state.dependencyGraph}
+                        dependencyGraph={engine.state.dependencyGraph}
                       />
                     ) : null}
                   </div>
@@ -221,10 +309,10 @@ export default function BuilderPage() {
             ))}
 
             {/* Build Ready Button */}
-            {engine.buildPrompt && !engine.isBuilding && !engine.isThinking && (
+            {engine.state.buildPrompt && !engine.state.isBuilding && !engine.state.isThinking && (
               <div className="flex justify-center animate-slide-up">
                 <button
-                  onClick={() => engine.handleStartBuild(engine.buildPrompt!)}
+                  onClick={engine.handleStartBuild}
                   className="px-8 py-4 bg-primary text-primary-foreground rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 flex items-center gap-3"
                 >
                   <Zap className="h-5 w-5" />
@@ -233,289 +321,242 @@ export default function BuilderPage() {
               </div>
             )}
 
-            {engine.isThinking && !chat.messages.some((m) => m.isStreaming) && (
-              <div className="flex gap-3 animate-slide-up">
-                <div className="w-8 h-8 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
-                  <Bot className="h-4 w-4 text-accent" />
-                </div>
-                <div className="bg-secondary rounded-2xl px-4 py-3 flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-primary animate-typing-dot-1" />
-                  <div className="w-2 h-2 rounded-full bg-primary animate-typing-dot-2" />
-                  <div className="w-2 h-2 rounded-full bg-primary animate-typing-dot-3" />
-                </div>
+            {/* Fix Suggestion Button */}
+            {engine.state.fixSuggestion && !engine.state.isBuilding && !engine.state.isThinking && (
+              <div className="flex justify-center animate-slide-up">
+                <button
+                  onClick={engine.handleApplyFix}
+                  className="px-8 py-4 bg-green-500 text-white rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 flex items-center gap-3"
+                >
+                  <CheckCircle2 className="h-5 w-5" />
+                  تطبيق الإصلاح المقترح ✅
+                </button>
+                <button
+                  onClick={engine.handleRejectFix}
+                  className="ml-4 px-8 py-4 bg-red-500 text-white rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 flex items-center gap-3"
+                >
+                  <AlertCircle className="h-5 w-5" />
+                  رفض الإصلاح ❌
+                </button>
               </div>
             )}
 
-            <div ref={chat.messagesEndRef} />
+            {/* Error Display */}
+            {engine.state.error && (
+              <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg flex items-center gap-3 animate-slide-up">
+                <AlertCircle className="h-5 w-5" />
+                <p className="text-sm font-medium">{engine.state.error}</p>
+              </div>
+            )}
+
+            {/* Loading Indicator */}
+            {(engine.state.isThinking || engine.state.isBuilding) && (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            )}
+
+            {/* Current VFS Version Display */}
+            {vfs.currentVersion && (
+              <div className="text-xs text-muted-foreground text-center mt-4">
+                الإصدار الحالي: {vfs.currentVersion.version} - {vfs.currentVersion.message}
+              </div>
+            )}
+
+            {/* Chat Input */}
+            <div className="sticky bottom-0 bg-card pt-4 border-t border-border">
+              <div className="flex items-center gap-2">
+                <textarea
+                  value={chat.input}
+                  onChange={(e) => chat.setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="اكتب رسالتك هنا..."
+                  rows={1}
+                  className="flex-1 p-3 rounded-lg border border-border bg-background text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <button
+                  onClick={handleSubmit}
+                  disabled={!chat.input.trim() || engine.state.isThinking || engine.state.isBuilding}
+                  className="w-10 h-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="h-5 w-5" />
+                </button>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1 text-center">
+                برق AI يمكنه ارتكاب الأخطاء. تحقق من المعلومات المهمة.
+              </p>
+            </div>
           </div>
         ) : activeTab === "code" ? (
-          <div className="flex flex-col h-full">
-            {project.files.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <FileCode className="h-12 w-12 text-muted-foreground/20 mb-4" />
-                <p className="text-sm text-muted-foreground">لم يتم إنشاء ملفات بعد</p>
+          <div className="h-full">
+            <div className="flex flex-col h-full">
+              <div className="flex-shrink-0 border-b border-border p-2 flex items-center gap-2 overflow-x-auto">
+                {vfs.files.map((file) => (
+                  <button
+                    key={file.name}
+                    onClick={() => setActiveFile(file.name)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium ${activeFile === file.name ? "bg-primary/15 text-primary" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}
+                  >
+                    {file.name}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-1 px-3 py-2 overflow-x-auto border-b border-border">
-                  {project.files.map((f) => (
-                    <button
-                      key={f.name}
-                      onClick={() => setActiveFile(f.name)}
-                      className={`text-xs px-3 py-1.5 rounded-lg font-mono whitespace-nowrap transition-colors ${
-                        activeFile === f.name || (!activeFile && f.name === project.files[0]?.name)
-                          ? "bg-primary/15 text-primary border border-primary/30"
-                          : "text-muted-foreground hover:bg-secondary"
-                      }`}
-                    >
-                      {f.name}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex-1 overflow-y-auto p-4">
-                  <pre className="text-xs leading-relaxed text-muted-foreground font-mono whitespace-pre-wrap" dir="ltr">
-                    {(project.files.find((f) => f.name === (activeFile || project.files[0]?.name)))?.content || ""}
+              <div className="flex-1 overflow-auto p-4 font-mono text-sm bg-gray-900 text-gray-500">
+                {activeFile ? (
+                  <pre className="whitespace-pre-wrap break-all">
+                    {vfs.files.find(f => f.name === activeFile)?.content}
                   </pre>
-                </div>
-              </>
-            )}
+                ) : (
+                  <p className="text-center text-muted-foreground">اختر ملفًا لعرض الكود.</p>
+                )}
+              </div>
+            </div>
           </div>
         ) : (
-          <div className="px-4 py-4 space-y-3">
-            <div className="flex items-center gap-2 mb-3">
-              <Info className="h-5 w-5 text-primary" />
-              <h3 className="text-base font-bold text-foreground">سجل النشاط</h3>
+          <div className="p-4">
+            <h3 className="text-lg font-bold mb-4">تفاصيل المشروع</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-muted-foreground">عنوان المشروع</label>
+                <input
+                  type="text"
+                  value={projectTitle}
+                  onChange={(e) => setProjectTitle(e.target.value)}
+                  onBlur={engine.saveProject} // Save project title on blur
+                  className="mt-1 block w-full rounded-md border-border bg-background shadow-sm p-2 text-foreground"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-muted-foreground">معرف المشروع</label>
+                <p className="mt-1 text-foreground p-2 bg-secondary rounded-md">{currentProjectId || "غير محفوظ"}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-muted-foreground">عدد الملفات</label>
+                <p className="mt-1 text-foreground p-2 bg-secondary rounded-md">{vfs.files.length}</p>
+              </div>
+              {/* GitHub Export */}
+              <div className="border-t border-border pt-4 mt-4">
+                <h4 className="text-md font-bold mb-2">تصدير GitHub</h4>
+                <button
+                  onClick={github.openModal}
+                  className="w-full bg-gray-800 text-white px-4 py-2 rounded-md flex items-center justify-center gap-2 hover:bg-gray-700 transition-colors"
+                >
+                  <Github className="h-5 w-5" />
+                  تصدير إلى GitHub
+                </button>
+              </div>
             </div>
-            {project.activityLog.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">لا يوجد نشاط بعد</p>
-            ) : (
-              project.activityLog.map((entry) => (
-                <div key={entry.id} className="flex items-start gap-2 text-sm">
-                  <span className={`shrink-0 px-2 py-0.5 rounded text-xs font-bold ${
-                    entry.type === "complete" ? "bg-green-500/15 text-green-400" :
-                    entry.type === "create" ? "bg-primary/15 text-primary" :
-                    "bg-accent/15 text-accent"
-                  }`}>
-                    {entry.type === "complete" ? "تم" : entry.type === "create" ? "إنشاء" : entry.type === "update" ? "تحديث" : "قراءة"}
-                  </span>
-                  <span className="text-muted-foreground">{entry.message}</span>
-                </div>
-              ))
-            )}
           </div>
         )}
-      </div>
-
-      {/* Input */}
-      <div className="border-t border-border p-4 shrink-0">
-        <div className="flex items-end gap-2 bg-secondary rounded-2xl p-2.5 border border-border focus-within:border-primary/50 transition-colors">
-          <button
-            onClick={() => { chat.clearMessages(); navigate("/builder"); }}
-            className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shrink-0"
-            title="محادثة جديدة"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-          <textarea
-            value={chat.input}
-            onChange={(e) => chat.setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="اسأل برق..."
-            rows={1}
-            className="flex-1 bg-transparent resize-none text-base text-foreground placeholder:text-muted-foreground focus:outline-none py-2 px-2 max-h-24"
-            disabled={engine.isThinking}
-          />
-          {engine.isThinking ? (
-            <button
-              onClick={engine.handleAbort}
-              className="w-10 h-10 rounded-xl bg-destructive text-destructive-foreground flex items-center justify-center shrink-0"
-            >
-              <div className="w-3.5 h-3.5 rounded-sm bg-destructive-foreground" />
-            </button>
-          ) : (
-            <button
-              onClick={handleSubmit}
-              disabled={!chat.input.trim()}
-              className="w-10 h-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-30 shrink-0"
-            >
-              <Send className="h-4 w-4 rotate-180" />
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  // ---- Preview Panel Content ----
-  const previewPanel = (
-    <div className="flex flex-col h-full bg-background">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
-        <div className="flex items-center gap-2">
-          {!chatPanelOpen && (
-            <button
-              onClick={() => setChatPanelOpen(true)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-              title="إظهار المحادثة"
-            >
-              <PanelLeft className="h-4 w-4" />
-            </button>
-          )}
-          <div className="flex items-center gap-2 bg-secondary rounded-lg px-3 py-1.5 min-w-[200px]">
-            <div className={`w-2 h-2 rounded-full ${project.files.length > 0 ? "bg-green-500" : "bg-muted-foreground/30"}`} />
-            <span className="text-xs text-muted-foreground font-mono truncate" dir="ltr">
-              {project.projectTitle.replace(/\s/g, "-").toLowerCase()}.barq.app
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="flex items-center bg-secondary rounded-lg p-0.5 gap-0.5">
-            <button
-              onClick={() => setPreviewDevice("mobile")}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                previewDevice === "mobile" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-              }`}
-              title="موبايل"
-            >
-              <Smartphone className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setPreviewDevice("tablet")}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                previewDevice === "tablet" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-              }`}
-              title="تابلت"
-            >
-              <Tablet className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setPreviewDevice("desktop")}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                previewDevice === "desktop" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
-              }`}
-              title="ديسكتوب"
-            >
-              <Monitor className="h-4 w-4" />
-            </button>
-          </div>
-          {project.files.length > 0 && (
-            <>
-              <span className="text-xs text-muted-foreground mr-2">{project.files.length} ملفات</span>
-              <button
-                onClick={() => github.githubToken ? github.setShowGithubExport(true) : github.handleConnectGithub()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-sm text-foreground hover:bg-muted transition-colors"
-                title="تصدير لـ GitHub"
-              >
-                <Github className="h-4 w-4" />
-                <span className="hidden sm:inline">تصدير</span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-hidden flex items-start justify-center bg-muted/30">
-        <div
-          className={`h-full transition-all duration-300 ease-in-out ${
-            previewDevice === "mobile"
-              ? "w-[375px] border-x border-border shadow-lg rounded-b-xl"
-              : previewDevice === "tablet"
-              ? "w-[768px] border-x border-border shadow-lg rounded-b-xl"
-              : "w-full"
-          }`}
-        >
-          <PreviewPanel files={project.files} />
-        </div>
       </div>
     </div>
   );
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
-      {/* Mobile */}
-      <div className="lg:hidden flex flex-col h-full">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-card shrink-0">
-          <div className="flex items-center gap-2">
-            <Zap className="h-5 w-5 text-primary" />
-            <span className="text-sm font-bold text-foreground truncate max-w-[120px]">{project.projectTitle}</span>
-          </div>
-          <div className="flex items-center gap-1 bg-secondary rounded-lg p-0.5">
-            <button
-              onClick={() => setMobileView("chat")}
-              className={`px-3 py-1.5 rounded-md text-sm font-bold transition-all ${
-                mobileView === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-              }`}
-            >
-              محادثة
-            </button>
-            <button
-              onClick={() => setMobileView("preview")}
-              className={`px-3 py-1.5 rounded-md text-sm font-bold transition-all ${
-                mobileView === "preview" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-              }`}
-            >
-              معاينة
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            {project.files.length > 0 && (
-              <button
-                onClick={() => github.githubToken ? github.setShowGithubExport(true) : github.handleConnectGithub()}
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                title="تصدير لـ GitHub"
-              >
-                <Github className="h-4 w-4" />
-              </button>
-            )}
-            <button onClick={() => navigate("/projects")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground">
-              <FolderOpen className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-hidden">
-          {mobileView === "chat" ? chatPanel : previewPanel}
-        </div>
-      </div>
-
-      {/* Desktop */}
-      <div className="hidden lg:flex h-full">
-        <ResizablePanelGroup direction="horizontal" className="h-full">
-          <ResizablePanel defaultSize={chatPanelOpen ? 55 : 100} minSize={30}>
-            {previewPanel}
+    <div className="flex h-screen bg-background text-foreground">
+      {chatPanelOpen && (
+        <ResizablePanelGroup direction="horizontal" className="min-h-screen">
+          <ResizablePanel defaultSize={40} minSize={30} maxSize={50} className="flex flex-col">
+            {chatPanel}
           </ResizablePanel>
-          {chatPanelOpen && (
-            <>
-              <ResizableHandle withHandle className="bg-border hover:bg-primary/30 transition-colors" />
-              <ResizablePanel defaultSize={45} minSize={25} maxSize={60}>
-                {chatPanel}
-              </ResizablePanel>
-            </>
-          )}
+          <ResizableHandle withHandle />
+          <ResizablePanel defaultSize={60} minSize={40} className="flex flex-col">
+            <PreviewPanel 
+              files={vfs.files} 
+              device={previewDevice} 
+              onPreviewError={(errorMessage, componentStack) => engine.handleFixError(errorMessage, componentStack)}
+            />
+            <div className="flex-shrink-0 border-t border-border bg-card p-2 flex items-center justify-center gap-2">
+              <button
+                onClick={() => setPreviewDevice("mobile")}
+                className={`p-2 rounded-md ${previewDevice === "mobile" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}
+                title="عرض الجوال"
+              >
+                <Smartphone className="h-5 w-5" />
+              </button>
+              <button
+                onClick={() => setPreviewDevice("tablet")}
+                className={`p-2 rounded-md ${previewDevice === "tablet" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}
+                title="عرض الجهاز اللوحي"
+              >
+                <Tablet className="h-5 w-5" />
+              </button>
+              <button
+                onClick={() => setPreviewDevice("desktop")}
+                className={`p-2 rounded-md ${previewDevice === "desktop" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}
+                title="عرض سطح المكتب"
+              >
+                <Monitor className="h-5 w-5" />
+              </button>
+            </div>
+          </ResizablePanel>
         </ResizablePanelGroup>
-      </div>
+      )}
+
+      {!chatPanelOpen && (
+        <div className="flex-1 flex flex-col">
+          <div className="flex-shrink-0 border-b border-border bg-card p-2 flex items-center gap-2">
+            <button
+              onClick={() => setChatPanelOpen(true)}
+              className="p-2 rounded-md text-muted-foreground hover:bg-secondary"
+              title="إظهار المحادثة"
+            >
+              <PanelLeft className="h-5 w-5" />
+            </button>
+            <h1 className="text-sm font-bold text-foreground">{projectTitle}</h1>
+          </div>
+          <PreviewPanel files={vfs.files} device={previewDevice} />
+          <div className="flex-shrink-0 border-t border-border bg-card p-2 flex items-center justify-center gap-2">
+            <button
+              onClick={() => setPreviewDevice("mobile")}
+              className={`p-2 rounded-md ${previewDevice === "mobile" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}
+              title="عرض الجوال"
+            >
+              <Smartphone className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setPreviewDevice("tablet")}
+              className={`p-2 rounded-md ${previewDevice === "tablet" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}
+              title="عرض الجهاز اللوحي"
+            >
+              <Tablet className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setPreviewDevice("desktop")}
+              className={`p-2 rounded-md ${previewDevice === "desktop" ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}
+              title="عرض سطح المكتب"
+            >
+              <Monitor className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* GitHub Export Modal */}
-      {github.showGithubExport && github.githubToken && (
+      {github.isModalOpen && (
         <GitHubExportModal
-          open={github.showGithubExport}
-          onClose={() => github.setShowGithubExport(false)}
-          githubToken={github.githubToken}
-          files={project.files}
-          projectTitle={project.projectTitle}
+          onClose={github.closeModal}
+          onExport={github.handleExport}
+          isLoading={github.isLoading}
+          authUrl={github.authUrl}
+          isAuthenticated={github.isAuthenticated}
+          files={vfs.files}
+          projectTitle={projectTitle}
         />
       )}
 
       {/* Review Status Badge */}
-      {engine.reviewStatus && (
+      {engine.state.reviewStatus && (
         <div className="fixed bottom-4 left-4 z-40 animate-slide-up">
           <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-bold ${
-            engine.reviewStatus === "reviewing" ? "bg-accent/10 border-accent/30 text-accent" :
-            engine.reviewStatus === "fixing" ? "bg-orange-500/10 border-orange-500/30 text-orange-400" :
-            engine.reviewStatus === "approved" ? "bg-green-500/10 border-green-500/30 text-green-400" :
+            engine.state.reviewStatus === "reviewing" ? "bg-accent/10 border-accent/30 text-accent" :
+            engine.state.reviewStatus === "fixing" ? "bg-orange-500/10 border-orange-500/30 text-orange-400" :
+            engine.state.reviewStatus === "approved" ? "bg-green-500/10 border-green-500/30 text-green-400" :
             "bg-secondary border-border text-muted-foreground"
           }`}>
-            {engine.reviewStatus === "reviewing" && <><Loader2 className="h-4 w-4 animate-spin" /> المدير يراجع...</>}
-            {engine.reviewStatus === "fixing" && <><AlertCircle className="h-4 w-4" /> جاري الإصلاح...</>}
-            {engine.reviewStatus === "approved" && <><CheckCircle2 className="h-4 w-4" /> تمت المراجعة ✅</>}
+            {engine.state.reviewStatus === "reviewing" && <><Loader2 className="h-4 w-4 animate-spin" /> المدير يراجع...</>}
+            {engine.state.reviewStatus === "fixing" && <><AlertCircle className="h-4 w-4" /> جاري الإصلاح...</>}
+            {engine.state.reviewStatus === "approved" && <><CheckCircle2 className="h-4 w-4" /> تمت المراجعة ✅</>}
           </div>
         </div>
       )}

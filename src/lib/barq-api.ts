@@ -13,7 +13,8 @@ export interface StreamCallbacks {
   onFileStart?: (path: string, action: string) => void;
   onFileDone?: (path: string, content: string) => void;
   onMessageDelta?: (text: string) => void;
-  onBuildReady?: (buildPrompt: string, summary: string, projectName: string) => void;
+  onBuildReady?: (buildPrompt: string, summary: string, projectName: string, dependencyGraph: any) => void;
+  onFixReady?: (operations: VFSOperation[], summary: string) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
 }
@@ -98,7 +99,10 @@ async function processSSEStream(
               callbacks.onMessageDelta?.(parsed.content);
               break;
             case "build_ready":
-              callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name);
+              callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name, parsed.dependencyGraph);
+              break;
+            case "fix_ready":
+              callbacks.onFixReady?.(parsed.operations, parsed.summary);
               break;
             case "done":
               callbacks.onDone?.();
@@ -140,7 +144,7 @@ async function processSSEStream(
 
 /** Stream conversation with the Gemini planner */
 export async function streamBarqPlanner(
-  messages: { role: string; content: string }[],
+  payload: { conversationHistory: { role: string; content: string }[]; projectId: string | null; vfsContext: any[] },
   callbacks: StreamCallbacks,
   signal?: AbortSignal
 ): Promise<void> {
@@ -150,7 +154,7 @@ export async function streamBarqPlanner(
   const resp = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages: payload.conversationHistory, projectId: payload.projectId, vfsContext: payload.vfsContext }),
     signal,
   });
 
@@ -164,18 +168,19 @@ export async function streamBarqPlanner(
 
 /** Stream build execution with Groq builder */
 export async function streamBarqBuilder(
-  buildPrompt: string,
+  payload: { buildPrompt: string; projectId: string | null; dependencyGraph: any; existingFiles: { path: string; content: string }[] },
   callbacks: StreamCallbacks,
-  signal?: AbortSignal,
-  existingFiles?: { path: string; content: string }[]
+  signal?: AbortSignal
 ): Promise<void> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
   const headers = await getAuthHeaders();
 
-  const body: any = { build_prompt: buildPrompt };
-  if (existingFiles && existingFiles.length > 0) {
-    body.existing_files = existingFiles;
-  }
+  const body: any = {
+    build_prompt: payload.buildPrompt,
+    projectId: payload.projectId,
+    dependencyGraph: payload.dependencyGraph,
+    existingFiles: payload.existingFiles,
+  };
 
   const resp = await fetch(url, {
     method: "POST",
@@ -264,4 +269,39 @@ export async function streamBarqAI(
   signal?: AbortSignal
 ): Promise<void> {
   return streamBarqPlanner(messages, callbacks, signal);
+}
+
+/** Stream fix suggestions from Gemini fixer */
+export async function streamBarqFixer(
+  payload: { errorMessage: string; componentStack: string; vfsContext: { path: string; content: string }[] },
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-fixer`;
+  const headers = await getAuthHeaders();
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      errorMessage: payload.errorMessage,
+      componentStack: payload.componentStack,
+      vfsContext: payload.vfsContext,
+    }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: "فشل الاتصال بخدمة الإصلاح" }));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+
+  await processSSEStream(resp, {
+    onFixReady: (operations, summary) => {
+      callbacks.onFixReady?.(operations, summary);
+    },
+    onDone: callbacks.onDone,
+    onError: callbacks.onError,
+    onMessageDelta: callbacks.onMessageDelta, // For any text output from fixer
+  }, signal);
 }
