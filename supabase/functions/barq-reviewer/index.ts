@@ -1,10 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+const DAILY_LIMIT = 30;
 
 const REVIEWER_SYSTEM_PROMPT = `أنت مراجع كود محترف ومدير مشروع. مهمتك مراجعة ملفات موقع ويب عربي تم توليدها بالذكاء الاصطناعي.
 
@@ -23,8 +26,40 @@ const REVIEWER_SYSTEM_PROMPT = `أنت مراجع كود محترف ومدير �
 - ركز على المشاكل الكبيرة فقط (ملفات ناقصة، أخطاء syntax، محتوى غير عربي)
 - لا تطلب تحسينات تجميلية بسيطة`;
 
-function sseEvent(data: Record<string, unknown>): string {
-  return `data: ${JSON.stringify(data)}\n\n`;
+async function authenticateUser(req: Request): Promise<{ userId: string } | Response> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: "غير مصرح — يرجى تسجيل الدخول" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  const token = authHeader.replace("Bearer ", "");
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return new Response(JSON.stringify({ error: "جلسة غير صالحة — يرجى تسجيل الدخول مجدداً" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const { data: allowed } = await supabase.rpc("check_and_increment_usage", {
+    p_user_id: user.id,
+    p_function_type: "reviewer",
+    p_daily_limit: DAILY_LIMIT,
+  });
+
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: "تم تجاوز الحد اليومي للمراجعة. حاول بكرة! ⚡" }), {
+      status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  return { userId: user.id };
 }
 
 serve(async (req) => {
@@ -33,6 +68,10 @@ serve(async (req) => {
   }
 
   try {
+    // Authenticate user
+    const authResult = await authenticateUser(req);
+    if (authResult instanceof Response) return authResult;
+
     const { build_prompt, files } = await req.json();
     if (!build_prompt || !files) throw new Error("build_prompt and files are required");
 
@@ -42,7 +81,6 @@ serve(async (req) => {
     ].filter(Boolean) as string[];
     if (geminiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
 
-    // Build file summary for review
     const fileSummary = files.map((f: any) => 
       `--- ${f.path} (${f.language}) ---\n${f.content.slice(0, 2000)}${f.content.length > 2000 ? "\n...(truncated)" : ""}`
     ).join("\n\n");
@@ -67,7 +105,6 @@ serve(async (req) => {
                 status: {
                   type: "string",
                   enum: ["approved", "needs_fix"],
-                  description: "Whether the code passes review",
                 },
                 summary_ar: {
                   type: "string",
@@ -78,13 +115,12 @@ serve(async (req) => {
                   items: {
                     type: "object",
                     properties: {
-                      file: { type: "string", description: "File path that needs fixing or 'NEW' for missing files" },
-                      issue: { type: "string", description: "Description of the issue in English" },
-                      fix_instruction: { type: "string", description: "Specific instruction for the builder to fix this issue" },
+                      file: { type: "string" },
+                      issue: { type: "string" },
+                      fix_instruction: { type: "string" },
                     },
                     required: ["file", "issue", "fix_instruction"],
                   },
-                  description: "List of issues found (empty if approved)",
                 },
                 fix_prompt: {
                   type: "string",
@@ -133,7 +169,6 @@ serve(async (req) => {
       );
     }
 
-    // Non-streaming: parse the full response
     const data = await response.json();
     const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
     

@@ -1,10 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+const DAILY_LIMIT = 50;
 
 const PLANNER_SYSTEM_PROMPT = `أنت "برق" ⚡ — مساعد ذكي سعودي متخصص في بناء وتعديل المواقع.
 
@@ -44,12 +47,53 @@ function sseEvent(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
+async function authenticateUser(req: Request): Promise<{ userId: string } | Response> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: "غير مصرح — يرجى تسجيل الدخول" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  const token = authHeader.replace("Bearer ", "");
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return new Response(JSON.stringify({ error: "جلسة غير صالحة — يرجى تسجيل الدخول مجدداً" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // Check rate limit
+  const { data: allowed } = await supabase.rpc("check_and_increment_usage", {
+    p_user_id: user.id,
+    p_function_type: "planner",
+    p_daily_limit: DAILY_LIMIT,
+  });
+
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: "تم تجاوز الحد اليومي المسموح. حاول بكرة! ⚡" }), {
+      status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  return { userId: user.id };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Authenticate user
+    const authResult = await authenticateUser(req);
+    if (authResult instanceof Response) return authResult;
+
     const { messages } = await req.json();
     const geminiKeys = [
       Deno.env.get("GEMINI_API_KEY"),
@@ -117,7 +161,6 @@ serve(async (req) => {
         console.warn("Gemini key rate-limited, trying fallback...");
         continue;
       }
-      // Non-429 error — return immediately
       const errBody = {
         error: res.status === 402
           ? "يرجى إضافة رصيد لحسابك."
@@ -216,7 +259,6 @@ serve(async (req) => {
               return;
             }
 
-            // Emit build_ready event with the English prompt
             controller.enqueue(
               encoder.encode(
                 sseEvent({
@@ -228,7 +270,6 @@ serve(async (req) => {
               )
             );
 
-            // Also send the Arabic summary as a message
             if (result.summary_ar) {
               controller.enqueue(
                 encoder.encode(

@@ -148,12 +148,52 @@ export type Database = {
         }
         Relationships: []
       }
+      user_usage: {
+        Row: {
+          builder_calls: number
+          created_at: string
+          id: string
+          planner_calls: number
+          reviewer_calls: number
+          updated_at: string
+          usage_date: string
+          user_id: string
+        }
+        Insert: {
+          builder_calls?: number
+          created_at?: string
+          id?: string
+          planner_calls?: number
+          reviewer_calls?: number
+          updated_at?: string
+          usage_date?: string
+          user_id: string
+        }
+        Update: {
+          builder_calls?: number
+          created_at?: string
+          id?: string
+          planner_calls?: number
+          reviewer_calls?: number
+          updated_at?: string
+          usage_date?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      check_and_increment_usage: {
+        Args: {
+          p_daily_limit?: number
+          p_function_type: string
+          p_user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
