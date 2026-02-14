@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect } from "react";
-import { Zap } from "lucide-react";
+import BarqLogo from "@/components/BarqLogo";
 
 const NotFound = () => {
   const location = useLocation();
@@ -13,9 +13,7 @@ const NotFound = () => {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="text-center">
-        <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-6">
-          <Zap className="h-8 w-8 text-primary" />
-        </div>
+        <div className="mx-auto mb-6"><BarqLogo size={64} /></div>
         <h1 className="mb-3 text-5xl font-bold text-foreground">404</h1>
         <p className="mb-6 text-lg text-muted-foreground">الصفحة غير موجودة</p>
         <button
