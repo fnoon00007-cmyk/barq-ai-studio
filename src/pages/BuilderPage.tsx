@@ -316,7 +316,8 @@ export default function BuilderPage() {
               updateAssistantMsg({ isStreaming: false });
             },
           },
-          abortController.signal
+          abortController.signal,
+          files.length > 0 ? files.map((f) => ({ path: f.name || (f as any).path, content: f.content })) : undefined
         );
         saveMessage("assistant", assistantContent);
         if (pendingOps.length > 0) setTimeout(() => saveProject(), 500);
@@ -358,9 +359,16 @@ export default function BuilderPage() {
       setIsThinking(true);
       setActiveTab("chat");
 
+      // Include existing files context if site is already built
+      let userContent = content;
+      if (files.length > 0) {
+        const fileList = files.map((f) => f.name || (f as any).path).join(", ");
+        userContent = `[existing_files: ${fileList}]\n${content}`;
+      }
+
       const conversationHistory = [
         ...messages.map((m) => ({ role: m.role, content: m.content })),
-        { role: "user", content },
+        { role: "user", content: userContent },
       ];
 
       const assistantMsgId = crypto.randomUUID();
