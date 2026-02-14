@@ -228,9 +228,20 @@ export async function githubExportAction(
   githubToken?: string
 ): Promise<any> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/github-export`;
-  const headers = await getAuthHeaders();
   
-  if (githubToken) (headers as any)["x-github-token"] = githubToken;
+  // Some actions don't require auth (get_auth_url, exchange_code)
+  let headers: Record<string, string>;
+  const noAuthActions = ["get_auth_url", "exchange_code"];
+  if (noAuthActions.includes(action)) {
+    headers = {
+      "Content-Type": "application/json",
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    };
+  } else {
+    headers = await getAuthHeaders();
+  }
+  
+  if (githubToken) headers["x-github-token"] = githubToken;
 
   const resp = await fetch(url, {
     method: "POST",
