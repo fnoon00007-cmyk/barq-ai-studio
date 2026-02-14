@@ -36,8 +36,11 @@ serve(async (req) => {
     const { build_prompt, files } = await req.json();
     if (!build_prompt || !files) throw new Error("build_prompt and files are required");
 
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+    const geminiKeys = [
+      Deno.env.get("GEMINI_API_KEY"),
+      Deno.env.get("GEMINI_API_KEY_2"),
+    ].filter(Boolean) as string[];
+    if (geminiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
 
     // Build file summary for review
     const fileSummary = files.map((f: any) => 
@@ -46,71 +49,87 @@ serve(async (req) => {
 
     const reviewPrompt = `## Original Build Prompt:\n${build_prompt}\n\n## Generated Files (${files.length} files):\n${fileSummary}\n\nReview these files and determine if the website is complete and correct.`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GEMINI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gemini-2.5-flash",
-          messages: [
-            { role: "system", content: REVIEWER_SYSTEM_PROMPT },
-            { role: "user", content: reviewPrompt },
-          ],
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "review_result",
-                description: "Submit the review result",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    status: {
-                      type: "string",
-                      enum: ["approved", "needs_fix"],
-                      description: "Whether the code passes review",
+    const requestBody = JSON.stringify({
+      model: "gemini-2.5-flash",
+      messages: [
+        { role: "system", content: REVIEWER_SYSTEM_PROMPT },
+        { role: "user", content: reviewPrompt },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "review_result",
+            description: "Submit the review result",
+            parameters: {
+              type: "object",
+              properties: {
+                status: {
+                  type: "string",
+                  enum: ["approved", "needs_fix"],
+                  description: "Whether the code passes review",
+                },
+                summary_ar: {
+                  type: "string",
+                  description: "ملخص المراجعة بالعربي للمستخدم",
+                },
+                issues: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      file: { type: "string", description: "File path that needs fixing or 'NEW' for missing files" },
+                      issue: { type: "string", description: "Description of the issue in English" },
+                      fix_instruction: { type: "string", description: "Specific instruction for the builder to fix this issue" },
                     },
-                    summary_ar: {
-                      type: "string",
-                      description: "ملخص المراجعة بالعربي للمستخدم",
-                    },
-                    issues: {
-                      type: "array",
-                      items: {
-                        type: "object",
-                        properties: {
-                          file: { type: "string", description: "File path that needs fixing or 'NEW' for missing files" },
-                          issue: { type: "string", description: "Description of the issue in English" },
-                          fix_instruction: { type: "string", description: "Specific instruction for the builder to fix this issue" },
-                        },
-                        required: ["file", "issue", "fix_instruction"],
-                      },
-                      description: "List of issues found (empty if approved)",
-                    },
-                    fix_prompt: {
-                      type: "string",
-                      description: "A combined English prompt for the builder to fix all issues. Only if status is needs_fix.",
-                    },
+                    required: ["file", "issue", "fix_instruction"],
                   },
-                  required: ["status", "summary_ar", "issues"],
+                  description: "List of issues found (empty if approved)",
+                },
+                fix_prompt: {
+                  type: "string",
+                  description: "A combined English prompt for the builder to fix all issues. Only if status is needs_fix.",
                 },
               },
+              required: ["status", "summary_ar", "issues"],
             },
-          ],
-          tool_choice: { type: "function", function: { name: "review_result" } },
-        }),
-      }
-    );
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "review_result" } },
+    });
 
-    if (!response.ok) {
-      const status = response.status;
+    let response: Response | null = null;
+    for (const key of geminiKeys) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: requestBody,
+        }
+      );
+      if (res.ok) {
+        response = res;
+        break;
+      }
+      if (res.status === 429) {
+        console.warn("Gemini reviewer key rate-limited, trying fallback...");
+        continue;
+      }
       return new Response(
-        JSON.stringify({ error: status === 429 ? "تم تجاوز الحد المسموح" : "خطأ في المراجعة" }),
-        { status: status >= 400 && status < 500 ? status : 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "خطأ في المراجعة" }),
+        { status: res.status >= 400 && res.status < 500 ? res.status : 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!response) {
+      return new Response(
+        JSON.stringify({ error: "تم تجاوز الحد المسموح لجميع المفاتيح، حاول لاحقاً." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
