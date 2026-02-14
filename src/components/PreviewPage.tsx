@@ -1,53 +1,11 @@
 import { VFSFile } from "@/hooks/useVFS";
 import { ArrowRight, Code, Smartphone } from "lucide-react";
 import { useMemo, useState } from "react";
+import { buildPreviewHTML } from "@/lib/preview-builder";
 
 interface PreviewPageProps {
   files: VFSFile[];
   onBack: () => void;
-}
-
-function buildPreviewHTML(files: VFSFile[]): string | null {
-  // Find the main app file - could be "App.tsx", "src/App.tsx", or any .tsx file
-  const appFile = files.find((f) => f.name === "App.tsx") 
-    || files.find((f) => f.name.endsWith("App.tsx"))
-    || files.find((f) => f.language === "tsx" || f.language === "html");
-  if (!appFile) return null;
-
-  const cssFile = files.find((f) => f.language === "css");
-  const cssContent = cssFile?.content || "";
-
-  let jsxContent = appFile.content;
-  
-  // Strip function/export wrappers to get raw JSX
-  // Remove: export default function X() { return (...) }
-  const returnMatch = jsxContent.match(/return\s*\(\s*([\s\S]*)\s*\)\s*;?\s*\}?\s*$/);
-  if (returnMatch) {
-    jsxContent = returnMatch[1];
-  }
-  // Also strip any remaining import/export lines
-  jsxContent = jsxContent.replace(/^(import|export)\s+.*$/gm, '').trim();
-
-  return `<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"><\/script>
-  <script>
-    tailwindcss.config = {
-      theme: { extend: { fontFamily: { cairo: ['Cairo', 'sans-serif'] } } }
-    }
-  <\/script>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Cairo', sans-serif; direction: rtl; overflow-x: hidden; }
-    ${cssContent}
-  </style>
-</head>
-<body>${jsxContent}</body>
-</html>`;
 }
 
 export function PreviewPage({ files, onBack }: PreviewPageProps) {
