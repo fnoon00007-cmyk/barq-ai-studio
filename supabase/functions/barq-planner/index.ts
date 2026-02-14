@@ -61,77 +61,93 @@ serve(async (req) => {
     if (authResult instanceof Response) return authResult;
 
     const { messages, vfsContext } = await req.json(); // Now receiving vfsContext
-    const geminiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!geminiKey) throw new Error("GEMINI_API_KEY is not configured");
+    const geminiKeys = [
+      Deno.env.get("GEMINI_API_KEY"),
+      Deno.env.get("GEMINI_API_KEY_2"),
+    ].filter(Boolean) as string[];
 
-    const geminiRequestBody = JSON.stringify({
-      model: "gemini-2.5-flash",
-      messages: [
-        { role: "system", content: PLANNER_SYSTEM_PROMPT },
-        ...messages,
-        // Inject VFS context into the conversation for the AI to analyze
-        { role: "system", content: `## سياق الملفات الحالية (VFS Context):\n${JSON.stringify(vfsContext, null, 2)}` }
-      ],
-      stream: true,
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "prepare_build_prompt",
-            description:
-              "استخدم هذه الأداة فقط بعد وضع خطة بناء واضحة وموافقة المستخدم.",
-            parameters: {
-              type: "object",
-              properties: {
-                build_prompt: {
-                  type: "string",
-                  description:
-                    "A detailed English technical prompt for the builder. Focus on the specific changes or new components required. Reference existing files when asking for modifications.",
-                },
-                summary_ar: {
-                  type: "string",
-                  description:
-                    "ملخص عربي مختصر للمستخدم يوضح الخطة التكرارية.",
-                },
-                project_name: {
-                  type: "string",
-                  description: "اسم المشروع أو الشركة.",
-                },
-                dependency_graph: {
-                    type: "object",
-                    description: "A JSON object representing the dependency graph of file operations (create, update, delete). Example: { \"nodes\": [{\"id\": \"App.tsx\", \"action\": \"update\"}, {\"id\": \"FAQ.tsx\", \"action\": \"create\"}], \"edges\": [{\"from\": \"App.tsx\", \"to\": \"FAQ.tsx\", \"label\": \"imports\"}] }",
-                    properties: {
-                        nodes: { type: "array", items: { type: "object" } },
-                        edges: { type: "array", items: { type: "object" } }
-                    }
+    const groqKeys = [
+      Deno.env.get("GROQ_API_KEY"),
+      Deno.env.get("GROQ_API_KEY_2"),
+      Deno.env.get("GROQ_API_KEY_3"),
+    ].filter(Boolean) as string[];
+
+    if (geminiKeys.length === 0 && groqKeys.length === 0) {
+      throw new Error("No AI API keys configured");
+    }
+
+    const aiMessages = [
+      { role: "system", content: PLANNER_SYSTEM_PROMPT },
+      ...messages,
+      { role: "system", content: `## سياق الملفات الحالية (VFS Context):\n${JSON.stringify(vfsContext, null, 2)}` }
+    ];
+
+    const toolsDef = [
+      {
+        type: "function",
+        function: {
+          name: "prepare_build_prompt",
+          description: "استخدم هذه الأداة فقط بعد وضع خطة بناء واضحة وموافقة المستخدم.",
+          parameters: {
+            type: "object",
+            properties: {
+              build_prompt: { type: "string", description: "A detailed English technical prompt for the builder." },
+              summary_ar: { type: "string", description: "ملخص عربي مختصر للمستخدم يوضح الخطة التكرارية." },
+              project_name: { type: "string", description: "اسم المشروع أو الشركة." },
+              dependency_graph: {
+                type: "object",
+                description: "A JSON object representing the dependency graph of file operations.",
+                properties: {
+                  nodes: { type: "array", items: { type: "object" } },
+                  edges: { type: "array", items: { type: "object" } }
                 }
-              },
-              required: ["build_prompt", "summary_ar", "project_name", "dependency_graph"],
+              }
             },
+            required: ["build_prompt", "summary_ar", "project_name", "dependency_graph"],
           },
         },
-      ],
-    });
+      },
+    ];
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${geminiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: geminiRequestBody,
-      }
-    );
+    let response: Response | null = null;
 
-    if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({ error: "An unknown error occurred" }));
-        console.error("Gemini API Error:", errorBody);
-        return new Response(JSON.stringify({ error: errorBody.error?.message || "حدث خطأ في الاتصال بالذكاء الاصطناعي" }), {
-            status: response.status,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Try Gemini keys first
+    for (const key of geminiKeys) {
+      const res = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "gemini-2.5-flash", messages: aiMessages, stream: true, tools: toolsDef }),
+        }
+      );
+      if (res.ok) { response = res; console.log("Gemini planner succeeded"); break; }
+      if (res.status === 429) { console.warn("Gemini planner key rate-limited, trying next..."); continue; }
+      console.error("Gemini planner error:", res.status);
+      continue;
+    }
+
+    // Fallback to Groq
+    if (!response) {
+      console.warn("All Gemini keys exhausted, falling back to Groq...");
+      for (const gKey of groqKeys) {
+        const gRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${gKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: aiMessages, stream: true, tools: toolsDef }),
         });
+        if (gRes.ok) { response = gRes; console.log("Groq planner fallback succeeded"); break; }
+        if (gRes.status === 429) { console.warn("Groq planner key rate-limited, trying next..."); continue; }
+        console.error("Groq planner error:", gRes.status);
+        continue;
+      }
+    }
+
+    if (!response) {
+      return new Response(
+        JSON.stringify({ error: "جميع مفاتيح الذكاء الاصطناعي وصلت للحد الأقصى، حاول بعد شوي ⚡" }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const encoder = new TextEncoder();
