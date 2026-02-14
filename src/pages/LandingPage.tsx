@@ -169,7 +169,11 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="relative z-10 border-t border-border py-8 px-4 text-center">
-        <p className="text-sm text-muted-foreground">© 2026 برق Ai - جميع الحقوق محفوظة</p>
+        <p className="text-sm text-muted-foreground">
+          © 2026{" "}
+          <a href="https://barqai.site" className="text-primary hover:underline">Barq Ai</a>
+          {" "}- جميع الحقوق محفوظة ⚡
+        </p>
       </footer>
     </div>
   );
