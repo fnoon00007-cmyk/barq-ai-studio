@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Zap, Mail, Lock, User, Loader2 } from "lucide-react";
+import { Mail, Lock, User, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import BarqLogo from "@/components/BarqLogo";
 
 type View = "login" | "signup" | "forgot";
 
@@ -14,7 +15,6 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // Redirect if already logged in (handles OAuth callback)
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
@@ -27,7 +27,6 @@ export default function AuthPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
     try {
       if (view === "forgot") {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -79,19 +78,22 @@ export default function AuthPage() {
   const title = view === "login" ? "تسجيل الدخول" : view === "signup" ? "إنشاء حساب جديد" : "استعادة كلمة المرور";
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl bg-card border border-border flex items-center justify-center mx-auto mb-4 animate-pulse-glow">
-            <Zap className="h-8 w-8 text-accent" />
+    <div className="min-h-screen bg-background flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Background glow */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
+
+      <div className="w-full max-w-md relative z-10">
+        {/* Logo & Branding */}
+        <div className="text-center mb-10">
+          <div className="mx-auto mb-4 animate-pulse-glow inline-block">
+            <BarqLogo size={64} />
           </div>
-          <h1 className="text-2xl font-bold text-foreground">برق Ai</h1>
-          <p className="text-sm text-muted-foreground mt-1">منشئ المواقع الذكي ⚡</p>
+          <h1 className="text-3xl font-bold text-foreground">برق Ai</h1>
+          <p className="text-sm text-muted-foreground mt-2">منشئ المواقع الذكي ⚡</p>
         </div>
 
-        {/* Form */}
-        <div className="bg-card border border-border rounded-2xl p-6">
+        {/* Form Card */}
+        <div className="bg-card border border-border rounded-2xl p-8 shadow-lg">
           <h2 className="text-lg font-bold text-foreground mb-6 text-center">{title}</h2>
 
           {/* Google Sign In */}
@@ -175,7 +177,7 @@ export default function AuthPage() {
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <>
-                  <Zap className="h-4 w-4" />
+                  <BarqLogo size={18} />
                   {view === "login" ? "دخول" : view === "signup" ? "إنشاء حساب" : "إرسال رابط الاستعادة"}
                 </>
               )}
@@ -186,33 +188,21 @@ export default function AuthPage() {
           <div className="mt-6 space-y-2 text-center">
             {view === "login" && (
               <>
-                <button
-                  onClick={() => setView("forgot")}
-                  className="text-xs text-primary hover:underline transition-colors block w-full"
-                >
+                <button onClick={() => setView("forgot")} className="text-xs text-primary hover:underline transition-colors block w-full">
                   نسيت كلمة المرور؟
                 </button>
-                <button
-                  onClick={() => setView("signup")}
-                  className="text-sm text-muted-foreground hover:text-primary transition-colors"
-                >
+                <button onClick={() => setView("signup")} className="text-sm text-muted-foreground hover:text-primary transition-colors">
                   ما عندك حساب؟ سجّل الآن
                 </button>
               </>
             )}
             {view === "signup" && (
-              <button
-                onClick={() => setView("login")}
-                className="text-sm text-muted-foreground hover:text-primary transition-colors"
-              >
+              <button onClick={() => setView("login")} className="text-sm text-muted-foreground hover:text-primary transition-colors">
                 عندك حساب؟ سجّل دخول
               </button>
             )}
             {view === "forgot" && (
-              <button
-                onClick={() => setView("login")}
-                className="text-sm text-muted-foreground hover:text-primary transition-colors"
-              >
+              <button onClick={() => setView("login")} className="text-sm text-muted-foreground hover:text-primary transition-colors">
                 الرجوع لتسجيل الدخول
               </button>
             )}

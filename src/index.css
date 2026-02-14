@@ -4,51 +4,101 @@
 
 @layer base {
   :root {
-    --background: 222 47% 6%;
-    --foreground: 210 40% 96%;
+    --background: 0 0% 100%;
+    --foreground: 0 0% 5%;
 
-    --card: 222 47% 9%;
-    --card-foreground: 210 40% 96%;
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 5%;
 
-    --popover: 222 47% 9%;
-    --popover-foreground: 210 40% 96%;
+    --popover: 0 0% 98%;
+    --popover-foreground: 0 0% 5%;
 
-    --primary: 205 100% 55%;
-    --primary-foreground: 222 47% 6%;
+    --primary: 205 100% 50%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 222 30% 14%;
-    --secondary-foreground: 210 40% 90%;
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 15%;
 
-    --muted: 222 30% 12%;
-    --muted-foreground: 215 20% 55%;
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 40%;
 
-    --accent: 45 100% 55%;
-    --accent-foreground: 222 47% 6%;
+    --accent: 45 100% 50%;
+    --accent-foreground: 0 0% 5%;
 
     --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 222 30% 16%;
-    --input: 222 30% 16%;
-    --ring: 205 100% 55%;
+    --border: 0 0% 90%;
+    --input: 0 0% 90%;
+    --ring: 205 100% 50%;
 
     --radius: 0.75rem;
 
-    --sidebar-background: 222 47% 8%;
-    --sidebar-foreground: 210 40% 90%;
+    --sidebar-background: 0 0% 97%;
+    --sidebar-foreground: 0 0% 15%;
+    --sidebar-primary: 205 100% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 94%;
+    --sidebar-accent-foreground: 0 0% 15%;
+    --sidebar-border: 0 0% 90%;
+    --sidebar-ring: 205 100% 50%;
+
+    /* BARQ custom tokens */
+    --barq-electric: 205 100% 50%;
+    --barq-gold: 45 100% 50%;
+    --barq-glow: 205 100% 60%;
+    --barq-surface: 0 0% 96%;
+    --barq-surface-hover: 0 0% 92%;
+    --barq-gradient-electric: linear-gradient(135deg, hsl(205 100% 50%), hsl(220 100% 55%));
+    --barq-gradient-gold: linear-gradient(135deg, hsl(45 100% 50%), hsl(35 100% 45%));
+    --barq-shadow-glow: 0 0 20px hsl(205 100% 50% / 0.15);
+    --barq-shadow-gold: 0 0 20px hsl(45 100% 50% / 0.1);
+  }
+
+  .dark {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 95%;
+
+    --card: 0 0% 5%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 0 0% 5%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 205 100% 55%;
+    --primary-foreground: 0 0% 0%;
+
+    --secondary: 0 0% 10%;
+    --secondary-foreground: 0 0% 90%;
+
+    --muted: 0 0% 8%;
+    --muted-foreground: 0 0% 55%;
+
+    --accent: 45 100% 55%;
+    --accent-foreground: 0 0% 0%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 95%;
+
+    --border: 0 0% 12%;
+    --input: 0 0% 12%;
+    --ring: 205 100% 55%;
+
+    --sidebar-background: 0 0% 3%;
+    --sidebar-foreground: 0 0% 90%;
     --sidebar-primary: 205 100% 55%;
-    --sidebar-primary-foreground: 222 47% 6%;
-    --sidebar-accent: 222 30% 14%;
-    --sidebar-accent-foreground: 210 40% 90%;
-    --sidebar-border: 222 30% 16%;
+    --sidebar-primary-foreground: 0 0% 0%;
+    --sidebar-accent: 0 0% 10%;
+    --sidebar-accent-foreground: 0 0% 90%;
+    --sidebar-border: 0 0% 12%;
     --sidebar-ring: 205 100% 55%;
 
     /* BARQ custom tokens */
     --barq-electric: 205 100% 55%;
     --barq-gold: 45 100% 55%;
     --barq-glow: 205 100% 65%;
-    --barq-surface: 222 47% 11%;
-    --barq-surface-hover: 222 35% 15%;
+    --barq-surface: 0 0% 7%;
+    --barq-surface-hover: 0 0% 12%;
     --barq-gradient-electric: linear-gradient(135deg, hsl(205 100% 55%), hsl(220 100% 60%));
     --barq-gradient-gold: linear-gradient(135deg, hsl(45 100% 55%), hsl(35 100% 50%));
     --barq-shadow-glow: 0 0 20px hsl(205 100% 55% / 0.3);
