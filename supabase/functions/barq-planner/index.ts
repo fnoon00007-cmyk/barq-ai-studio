@@ -101,7 +101,7 @@ serve(async (req) => {
     ].filter(Boolean) as string[];
     if (geminiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
 
-    const requestBody = JSON.stringify({
+    const geminiRequestBody = JSON.stringify({
       model: "gemini-2.5-flash",
       messages: [
         { role: "system", content: PLANNER_SYSTEM_PROMPT },
@@ -141,6 +141,9 @@ serve(async (req) => {
     });
 
     let response: Response | null = null;
+    let usedProvider = "gemini";
+
+    // Try Gemini keys first
     for (const key of geminiKeys) {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
@@ -150,7 +153,7 @@ serve(async (req) => {
             Authorization: `Bearer ${key}`,
             "Content-Type": "application/json",
           },
-          body: requestBody,
+          body: geminiRequestBody,
         }
       );
       if (res.ok) {
@@ -172,9 +175,82 @@ serve(async (req) => {
       });
     }
 
+    // Fallback to Groq if all Gemini keys are rate-limited
+    if (!response) {
+      console.warn("All Gemini keys exhausted, falling back to Groq...");
+      const groqKeys = [
+        Deno.env.get("GROQ_API_KEY"),
+        Deno.env.get("GROQ_API_KEY_2"),
+      ].filter(Boolean) as string[];
+
+      if (groqKeys.length > 0) {
+        const groqRequestBody = JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: PLANNER_SYSTEM_PROMPT },
+            ...messages,
+          ],
+          stream: true,
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "prepare_build_prompt",
+                description:
+                  "استخدم هذه الأداة فقط بعد جمع كل المتطلبات وموافقة المستخدم الصريحة. أنشئ برومبت إنجليزي تقني مفصل لبناء الموقع.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    build_prompt: {
+                      type: "string",
+                      description:
+                        "A detailed English technical prompt for the website builder.",
+                    },
+                    summary_ar: {
+                      type: "string",
+                      description: "ملخص عربي مختصر للمستخدم يوضح ما سيتم بناؤه",
+                    },
+                    project_name: {
+                      type: "string",
+                      description: "اسم المشروع أو الشركة",
+                    },
+                  },
+                  required: ["build_prompt", "summary_ar", "project_name"],
+                },
+              },
+            },
+          ],
+        });
+
+        for (const key of groqKeys) {
+          const res = await fetch(
+            "https://api.groq.com/openai/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${key}`,
+                "Content-Type": "application/json",
+              },
+              body: groqRequestBody,
+            }
+          );
+          if (res.ok) {
+            response = res;
+            usedProvider = "groq";
+            console.log("Successfully fell back to Groq for planning");
+            break;
+          }
+          if (res.status === 429) {
+            console.warn("Groq key also rate-limited...");
+            continue;
+          }
+        }
+      }
+    }
+
     if (!response) {
       return new Response(
-        JSON.stringify({ error: "تم تجاوز الحد المسموح لجميع المفاتيح، حاول لاحقاً." }),
+        JSON.stringify({ error: "جميع الخوادم مشغولة حالياً، حاول بعد دقيقة ⚡" }),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
