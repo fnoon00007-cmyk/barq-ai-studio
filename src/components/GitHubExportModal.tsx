@@ -15,6 +15,9 @@ import {
   Lock,
   Globe,
   X,
+  AlertTriangle,
+  WifiOff,
+  ShieldAlert,
 } from "lucide-react";
 
 interface GitHubExportModalProps {
@@ -33,6 +36,43 @@ interface GitHubRepo {
 
 type ExportStep = "choose" | "new-repo" | "existing-repo" | "exporting" | "done";
 
+/** Map error messages to user-friendly Arabic messages */
+function getErrorDetails(error: string): { message: string; icon: React.ReactNode; suggestion: string } {
+  if (error.includes("Failed to fetch") || error.includes("فشل الاتصال") || error.includes("NetworkError")) {
+    return {
+      message: "لا يمكن الاتصال بالخادم",
+      icon: <WifiOff className="h-5 w-5" />,
+      suggestion: "تحقق من اتصالك بالإنترنت وحاول مرة أخرى",
+    };
+  }
+  if (error.includes("401") || error.includes("Bad credentials") || error.includes("token")) {
+    return {
+      message: "انتهت صلاحية ربط GitHub",
+      icon: <ShieldAlert className="h-5 w-5" />,
+      suggestion: "أعد ربط حسابك بـ GitHub وحاول مرة أخرى",
+    };
+  }
+  if (error.includes("422") || error.includes("already exists") || error.includes("name already")) {
+    return {
+      message: "اسم المستودع موجود بالفعل",
+      icon: <AlertTriangle className="h-5 w-5" />,
+      suggestion: "اختر اسم مختلف للمستودع أو استخدم مستودع موجود",
+    };
+  }
+  if (error.includes("403") || error.includes("forbidden")) {
+    return {
+      message: "ليس لديك صلاحية لهذه العملية",
+      icon: <ShieldAlert className="h-5 w-5" />,
+      suggestion: "تأكد أن حسابك لديه صلاحيات الكتابة على المستودع",
+    };
+  }
+  return {
+    message: error || "حدث خطأ غير متوقع",
+    icon: <AlertTriangle className="h-5 w-5" />,
+    suggestion: "حاول مرة أخرى أو تواصل مع الدعم الفني",
+  };
+}
+
 export function GitHubExportModal({
   open,
   onClose,
@@ -50,13 +90,14 @@ export function GitHubExportModal({
   const [exporting, setExporting] = useState(false);
   const [exportedRepo, setExportedRepo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [exportProgress, setExportProgress] = useState<string>("");
 
-  // Reset state when modal opens
   useEffect(() => {
     if (open) {
       setStep("choose");
       setError(null);
       setExportedRepo(null);
+      setExportProgress("");
     }
   }, [open]);
 
@@ -82,14 +123,17 @@ export function GitHubExportModal({
       let repoFullName: string;
 
       if (mode === "new") {
+        setExportProgress("جاري إنشاء المستودع...");
         const { repo } = await githubExportAction("create_repo", { repo_name: repoName }, githubToken);
         repoFullName = repo.full_name;
+        setExportProgress("تم إنشاء المستودع، جاري التجهيز...");
         await new Promise((r) => setTimeout(r, 2000));
       } else {
         if (!selectedRepo) throw new Error("اختر مستودع أولاً");
         repoFullName = selectedRepo;
       }
 
+      setExportProgress("جاري رفع الملفات...");
       const vfsFiles = files.map((f) => ({
         path: f.name,
         content: f.content,
@@ -105,6 +149,7 @@ export function GitHubExportModal({
       setStep("choose");
     } finally {
       setExporting(false);
+      setExportProgress("");
     }
   };
 
@@ -117,13 +162,15 @@ export function GitHubExportModal({
   ];
   const totalFiles = files.length + scaffoldFiles.length;
 
+  const errorDetails = error ? getErrorDetails(error) : null;
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => !exporting && onClose()}>
-      <div className="bg-card border border-border rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => !exporting && onClose()}>
+      <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-border sticky top-0 bg-card z-10">
           <div className="flex items-center gap-3">
-            {step !== "choose" && step !== "done" && (
+            {step !== "choose" && step !== "done" && !exporting && (
               <button onClick={() => setStep("choose")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors">
                 <ArrowLeft className="h-4 w-4" />
               </button>
@@ -149,19 +196,28 @@ export function GitHubExportModal({
           )}
         </div>
 
-        {/* Error */}
-        {error && (
-          <div className="mx-6 mt-4 px-4 py-3 rounded-xl bg-destructive/10 border border-destructive/30 text-destructive text-sm">
-            {error}
+        {/* Error with details */}
+        {errorDetails && (
+          <div className="mx-4 sm:mx-6 mt-4 px-4 py-3 rounded-xl bg-destructive/10 border border-destructive/30 space-y-2">
+            <div className="flex items-center gap-2 text-destructive">
+              {errorDetails.icon}
+              <span className="text-sm font-bold">{errorDetails.message}</span>
+            </div>
+            <p className="text-xs text-destructive/80">{errorDetails.suggestion}</p>
+            <button
+              onClick={() => setError(null)}
+              className="text-xs text-destructive/60 hover:text-destructive underline transition-colors"
+            >
+              إخفاء
+            </button>
           </div>
         )}
 
         {/* Content */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {/* Step: Choose */}
           {step === "choose" && (
             <div className="space-y-3">
-              {/* File summary */}
               <div className="flex items-center gap-3 p-4 rounded-xl bg-secondary/50 border border-border mb-4">
                 <FolderTree className="h-5 w-5 text-primary shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -202,7 +258,6 @@ export function GitHubExportModal({
                 </div>
               </button>
 
-              {/* Files list expandable */}
               <details className="mt-2">
                 <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
                   عرض قائمة الملفات ({totalFiles})
@@ -267,11 +322,16 @@ export function GitHubExportModal({
               </div>
 
               {loadingRepos ? (
-                <div className="flex items-center justify-center py-8">
+                <div className="flex flex-col items-center justify-center py-8 gap-2">
                   <Loader2 className="h-6 w-6 text-primary animate-spin" />
+                  <p className="text-xs text-muted-foreground">جاري تحميل المستودعات...</p>
                 </div>
               ) : repos.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">لا توجد مستودعات</p>
+                <div className="flex flex-col items-center py-8 gap-2">
+                  <Github className="h-8 w-8 text-muted-foreground/30" />
+                  <p className="text-sm text-muted-foreground">لا توجد مستودعات</p>
+                  <p className="text-xs text-muted-foreground/60">أنشئ مستودع جديد بدلاً من ذلك</p>
+                </div>
               ) : (
                 <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
                   {repos.map((repo) => (
@@ -312,7 +372,7 @@ export function GitHubExportModal({
             </div>
           )}
 
-          {/* Step: Exporting */}
+          {/* Step: Exporting with progress */}
           {step === "exporting" && (
             <div className="flex flex-col items-center gap-4 py-8">
               <div className="relative">
@@ -323,9 +383,16 @@ export function GitHubExportModal({
                   <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
                 </div>
               </div>
-              <div className="text-center">
-                <p className="font-bold text-foreground mb-1">جاري تصدير {totalFiles} ملف...</p>
-                <p className="text-xs text-muted-foreground">يتم إنشاء الملفات ورفعها لـ GitHub</p>
+              <div className="text-center space-y-2">
+                <p className="font-bold text-foreground">جاري تصدير {totalFiles} ملف...</p>
+                {exportProgress && (
+                  <p className="text-xs text-primary animate-pulse">{exportProgress}</p>
+                )}
+                <p className="text-xs text-muted-foreground">يرجى عدم إغلاق الصفحة</p>
+              </div>
+              {/* Progress bar */}
+              <div className="w-full max-w-xs h-1.5 rounded-full bg-secondary overflow-hidden">
+                <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: "60%" }} />
               </div>
             </div>
           )}
