@@ -44,72 +44,89 @@ serve(async (req) => {
 
   try {
     const { messages } = await req.json();
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not configured");
+    const geminiKeys = [
+      Deno.env.get("GEMINI_API_KEY"),
+      Deno.env.get("GEMINI_API_KEY_2"),
+    ].filter(Boolean) as string[];
+    if (geminiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GEMINI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gemini-2.5-flash",
-          messages: [
-            { role: "system", content: PLANNER_SYSTEM_PROMPT },
-            ...messages,
-          ],
-          stream: true,
-          tools: [
-            {
-              type: "function",
-              function: {
-                name: "prepare_build_prompt",
-                description:
-                  "استخدم هذه الأداة فقط بعد جمع كل المتطلبات وموافقة المستخدم الصريحة. أنشئ برومبت إنجليزي تقني مفصل لبناء الموقع.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    build_prompt: {
-                      type: "string",
-                      description:
-                        "A detailed English technical prompt for the website builder. Include: business type, business name, color scheme (primary, secondary, accent colors as Tailwind classes), sections needed (Hero, Services, About, Testimonials, Contact, Footer), specific content in Arabic (services list, about text, contact info), design style (modern, minimalist, bold, etc.), and any special requirements. Be very specific and detailed.",
-                    },
-                    summary_ar: {
-                      type: "string",
-                      description:
-                        "ملخص عربي مختصر للمستخدم يوضح ما سيتم بناؤه",
-                    },
-                    project_name: {
-                      type: "string",
-                      description: "اسم المشروع أو الشركة",
-                    },
-                  },
-                  required: ["build_prompt", "summary_ar", "project_name"],
+    const requestBody = JSON.stringify({
+      model: "gemini-2.5-flash",
+      messages: [
+        { role: "system", content: PLANNER_SYSTEM_PROMPT },
+        ...messages,
+      ],
+      stream: true,
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "prepare_build_prompt",
+            description:
+              "استخدم هذه الأداة فقط بعد جمع كل المتطلبات وموافقة المستخدم الصريحة. أنشئ برومبت إنجليزي تقني مفصل لبناء الموقع.",
+            parameters: {
+              type: "object",
+              properties: {
+                build_prompt: {
+                  type: "string",
+                  description:
+                    "A detailed English technical prompt for the website builder. Include: business type, business name, color scheme (primary, secondary, accent colors as Tailwind classes), sections needed (Hero, Services, About, Testimonials, Contact, Footer), specific content in Arabic (services list, about text, contact info), design style (modern, minimalist, bold, etc.), and any special requirements. Be very specific and detailed.",
+                },
+                summary_ar: {
+                  type: "string",
+                  description:
+                    "ملخص عربي مختصر للمستخدم يوضح ما سيتم بناؤه",
+                },
+                project_name: {
+                  type: "string",
+                  description: "اسم المشروع أو الشركة",
                 },
               },
+              required: ["build_prompt", "summary_ar", "project_name"],
             },
-          ],
-        }),
-      }
-    );
+          },
+        },
+      ],
+    });
 
-    if (!response.ok) {
-      const status = response.status;
+    let response: Response | null = null;
+    for (const key of geminiKeys) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: requestBody,
+        }
+      );
+      if (res.ok) {
+        response = res;
+        break;
+      }
+      if (res.status === 429) {
+        console.warn("Gemini key rate-limited, trying fallback...");
+        continue;
+      }
+      // Non-429 error — return immediately
       const errBody = {
-        error:
-          status === 429
-            ? "تم تجاوز الحد المسموح، حاول لاحقاً."
-            : status === 402
-            ? "يرجى إضافة رصيد لحسابك."
-            : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
+        error: res.status === 402
+          ? "يرجى إضافة رصيد لحسابك."
+          : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
       };
       return new Response(JSON.stringify(errBody), {
-        status: status >= 400 && status < 500 ? status : 500,
+        status: res.status >= 400 && res.status < 500 ? res.status : 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    if (!response) {
+      return new Response(
+        JSON.stringify({ error: "تم تجاوز الحد المسموح لجميع المفاتيح، حاول لاحقاً." }),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const encoder = new TextEncoder();
