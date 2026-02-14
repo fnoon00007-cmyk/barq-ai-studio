@@ -150,9 +150,15 @@ export async function streamBarqPlanner(
 export async function streamBarqBuilder(
   buildPrompt: string,
   callbacks: StreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  existingFiles?: { path: string; content: string }[]
 ): Promise<void> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
+
+  const body: any = { build_prompt: buildPrompt };
+  if (existingFiles && existingFiles.length > 0) {
+    body.existing_files = existingFiles;
+  }
 
   const resp = await fetch(url, {
     method: "POST",
@@ -160,7 +166,7 @@ export async function streamBarqBuilder(
       "Content-Type": "application/json",
       Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
     },
-    body: JSON.stringify({ build_prompt: buildPrompt }),
+    body: JSON.stringify(body),
     signal,
   });
 

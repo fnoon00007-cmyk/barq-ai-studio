@@ -6,7 +6,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILDER_SYSTEM_PROMPT = `You are "Barq Builder" — a professional frontend engineer that generates Arabic RTL websites using raw JSX/HTML with Tailwind CSS.
+const BUILDER_SYSTEM_PROMPT = `You are "Barq Builder" — a professional frontend engineer that generates and MODIFIES Arabic RTL websites using raw JSX/HTML with Tailwind CSS.
 
 ## CRITICAL RULES:
 - You ONLY receive a technical build prompt and generate website files
@@ -19,6 +19,16 @@ const BUILDER_SYSTEM_PROMPT = `You are "Barq Builder" — a professional fronten
 - No function declarations, export, import statements — raw JSX only
 - Saudi-style content (Saudi names, addresses, 966+ numbers)
 - Responsive design: use sm:, md:, lg: breakpoints
+
+## MODIFICATION MODE:
+When the prompt includes "EXISTING FILES" section:
+- You are MODIFYING an existing website, NOT building from scratch
+- Read the existing files carefully
+- Only create/update files that need changes
+- Use action: "update" for modified files, action: "create" for new files
+- Keep unchanged files as-is (don't regenerate them)
+- Maintain the existing color scheme, style, and structure unless told otherwise
+- If adding a new component, also update App.tsx to include it
 
 ## COLOR SYSTEM:
 Choose a cohesive palette based on business type:
@@ -55,7 +65,7 @@ Color rules:
 - bg-white rounded-2xl p-8 shadow-sm hover:shadow-xl border border-gray-100 hover:border-{primary}-200 transition-all duration-300 hover:-translate-y-1
 - Icon container: <div class="w-14 h-14 rounded-xl bg-{color}-100 flex items-center justify-center mb-5">
 
-## REQUIRED FILES (minimum 6):
+## REQUIRED FILES (for new builds, minimum 6):
 
 ### 1. styles.css
 CSS variables, animations (fadeInUp, fadeIn, slideInRight), glass-effect, text-gradient classes.
@@ -102,8 +112,17 @@ serve(async (req) => {
   }
 
   try {
-    const { build_prompt } = await req.json();
+    const { build_prompt, existing_files } = await req.json();
     if (!build_prompt) throw new Error("build_prompt is required");
+
+    // If existing files provided, append them to the prompt
+    let fullPrompt = build_prompt;
+    if (existing_files && Array.isArray(existing_files) && existing_files.length > 0) {
+      const filesContext = existing_files
+        .map((f: any) => `--- ${f.path} ---\n${f.content.slice(0, 3000)}${f.content.length > 3000 ? "\n...(truncated)" : ""}`)
+        .join("\n\n");
+      fullPrompt += `\n\n## EXISTING FILES (modify these, don't rebuild from scratch):\n${filesContext}`;
+    }
 
     const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
     if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY is not configured");
@@ -120,7 +139,7 @@ serve(async (req) => {
           model: "llama-3.3-70b-versatile",
           messages: [
             { role: "system", content: BUILDER_SYSTEM_PROMPT },
-            { role: "user", content: build_prompt },
+            { role: "user", content: fullPrompt },
           ],
           stream: true,
           tools: [
