@@ -1,10 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+const DAILY_LIMIT = 30;
 
 const BUILDER_SYSTEM_PROMPT = `You are "Barq Builder" — a professional frontend engineer that generates and MODIFIES Arabic RTL websites using raw JSX/HTML with Tailwind CSS.
 
@@ -106,16 +109,55 @@ function sseEvent(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
+async function authenticateUser(req: Request): Promise<{ userId: string } | Response> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: "غير مصرح — يرجى تسجيل الدخول" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  const token = authHeader.replace("Bearer ", "");
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return new Response(JSON.stringify({ error: "جلسة غير صالحة — يرجى تسجيل الدخول مجدداً" }), {
+      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const { data: allowed } = await supabase.rpc("check_and_increment_usage", {
+    p_user_id: user.id,
+    p_function_type: "builder",
+    p_daily_limit: DAILY_LIMIT,
+  });
+
+  if (!allowed) {
+    return new Response(JSON.stringify({ error: "تم تجاوز الحد اليومي للبناء. حاول بكرة! ⚡" }), {
+      status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  return { userId: user.id };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Authenticate user
+    const authResult = await authenticateUser(req);
+    if (authResult instanceof Response) return authResult;
+
     const { build_prompt, existing_files } = await req.json();
     if (!build_prompt) throw new Error("build_prompt is required");
 
-    // If existing files provided, append them to the prompt
     let fullPrompt = build_prompt;
     if (existing_files && Array.isArray(existing_files) && existing_files.length > 0) {
       const filesContext = existing_files
@@ -299,7 +341,6 @@ serve(async (req) => {
               return;
             }
 
-            // Emit thinking steps
             if (result.thought_process?.length) {
               controller.enqueue(
                 encoder.encode(sseEvent({ event: "thinking_start" }))
@@ -311,7 +352,6 @@ serve(async (req) => {
               }
             }
 
-            // Emit file operations
             if (result.vfs_operations?.length) {
               for (const op of result.vfs_operations) {
                 controller.enqueue(

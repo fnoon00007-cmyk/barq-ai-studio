@@ -1,3 +1,5 @@
+import { supabase } from "@/integrations/supabase/client";
+
 export interface VFSOperation {
   path: string;
   action: "create" | "update";
@@ -17,6 +19,22 @@ export interface StreamCallbacks {
 }
 
 const STREAM_TIMEOUT_MS = 45_000;
+
+/** Get auth headers with user's actual session token */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  
+  if (!token) {
+    throw new Error("يرجى تسجيل الدخول أولاً");
+  }
+
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+    apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  };
+}
 
 async function processSSEStream(
   resp: Response,
@@ -127,13 +145,11 @@ export async function streamBarqPlanner(
   signal?: AbortSignal
 ): Promise<void> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-planner`;
+  const headers = await getAuthHeaders();
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-    },
+    headers,
     body: JSON.stringify({ messages }),
     signal,
   });
@@ -154,6 +170,7 @@ export async function streamBarqBuilder(
   existingFiles?: { path: string; content: string }[]
 ): Promise<void> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
+  const headers = await getAuthHeaders();
 
   const body: any = { build_prompt: buildPrompt };
   if (existingFiles && existingFiles.length > 0) {
@@ -162,10 +179,7 @@ export async function streamBarqBuilder(
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-    },
+    headers,
     body: JSON.stringify(body),
     signal,
   });
@@ -191,13 +205,11 @@ export async function reviewBuild(
   files: { path: string; content: string; language: string }[]
 ): Promise<ReviewResult> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-reviewer`;
+  const headers = await getAuthHeaders();
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-    },
+    headers,
     body: JSON.stringify({ build_prompt: buildPrompt, files }),
   });
 
@@ -216,12 +228,9 @@ export async function githubExportAction(
   githubToken?: string
 ): Promise<any> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/github-export`;
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-  };
-  if (githubToken) headers["x-github-token"] = githubToken;
+  const headers = await getAuthHeaders();
+  
+  if (githubToken) (headers as any)["x-github-token"] = githubToken;
 
   const resp = await fetch(url, {
     method: "POST",
