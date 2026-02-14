@@ -11,6 +11,7 @@ export interface StreamCallbacks {
   onThinkingStart?: () => void;
   onThinkingStep?: (step: string) => void;
   onFileStart?: (path: string, action: string) => void;
+  onFileChunk?: (path: string, chunk: string) => void;
   onFileDone?: (path: string, content: string) => void;
   onMessageDelta?: (text: string) => void;
   onBuildReady?: (buildPrompt: string, summary: string, projectName: string, dependencyGraph: any) => void;
@@ -92,6 +93,9 @@ async function processSSEStream(
             case "file_start":
               callbacks.onFileStart?.(parsed.path, parsed.action);
               break;
+            case "file_chunk":
+              callbacks.onFileChunk?.(parsed.path, parsed.content);
+              break;
             case "file_done":
               callbacks.onFileDone?.(parsed.path, parsed.content);
               break;
@@ -125,7 +129,7 @@ async function processSSEStream(
         try {
           const parsed = JSON.parse(jsonStr);
           if (parsed.event === "message_delta") callbacks.onMessageDelta?.(parsed.content);
-          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name);
+          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.build_prompt, parsed.summary, parsed.project_name, parsed.dependencyGraph);
           if (parsed.event === "done") {
             callbacks.onDone?.();
             return;
@@ -268,7 +272,7 @@ export async function streamBarqAI(
   callbacks: StreamCallbacks,
   signal?: AbortSignal
 ): Promise<void> {
-  return streamBarqPlanner(messages, callbacks, signal);
+  return streamBarqPlanner({ conversationHistory: messages, projectId: null, vfsContext: [] }, callbacks, signal);
 }
 
 /** Stream fix suggestions from Gemini fixer */

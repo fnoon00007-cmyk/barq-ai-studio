@@ -1,6 +1,6 @@
 
 import { useState, useCallback, useEffect } from 'react';
-import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
 // --- Types and Interfaces ---
@@ -8,23 +8,22 @@ import { toast } from 'sonner';
 export interface VFSFile {
   name: string;
   content: string;
-  language: 'tsx' | 'css' | 'html' | 'json' | 'ts' | 'js'; // Added more languages
-  version?: number; // New: To track the version of this specific file
+  language: 'tsx' | 'css' | 'html' | 'json' | 'ts' | 'js';
+  version?: number;
 }
 
 export interface VFSOperation {
   path: string;
-  content?: string; // Content is optional for delete operations
+  content?: string;
   action: 'create' | 'update' | 'delete';
-  timestamp?: string; // New: For better history tracking
+  timestamp?: string;
 }
 
-// New: Represents a snapshot of the VFS at a given point in time
 export interface VFSVersionSnapshot {
   version: number;
   timestamp: string;
   files: VFSFile[];
-  message: string; // e.g., "Initial build", "User requested button", "AI fixed error"
+  message: string;
 }
 
 interface UseVFSProps {
@@ -33,66 +32,64 @@ interface UseVFSProps {
 }
 
 export function useVFS({ projectId, initialFiles = [] }: UseVFSProps) {
-  const supabase = useSupabaseClient();
   const [files, setFiles] = useState<VFSFile[]>(initialFiles);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [vfsHistory, setVfsHistory] = useState<VFSVersionSnapshot[]>([]);
   const [currentVersionIndex, setCurrentVersionIndex] = useState<number>(-1);
 
-  // Load files and history from the database
   const loadFilesAndHistory = useCallback(async () => {
     if (!projectId) return;
     setLoading(true);
     setError(null);
     try {
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('projects')
-        .select('vfs_history, current_vfs_version')
+        .select('vfs_data')
         .eq('id', projectId)
         .single();
 
-      if (error) throw error;
+      if (fetchError) throw fetchError;
 
-      if (data && data.vfs_history && data.vfs_history.length > 0) {
-        const history: VFSVersionSnapshot[] = data.vfs_history;
-        const currentVersion = data.current_vfs_version !== null ? data.current_vfs_version : history.length - 1;
-        
-        setVfsHistory(history);
-        setCurrentVersionIndex(currentVersion);
-        setFiles(history[currentVersion].files);
-      } else {
-        // If no history, initialize with current files (if any) and create first snapshot
-        if (initialFiles.length > 0) {
+      if (data?.vfs_data && Array.isArray(data.vfs_data) && (data.vfs_data as any[]).length > 0) {
+        // Try to load as VFS history format
+        const vfsData = data.vfs_data as any;
+        if (vfsData[0]?.files) {
+          // It's history format
+          const history: VFSVersionSnapshot[] = vfsData;
+          setVfsHistory(history);
+          setCurrentVersionIndex(history.length - 1);
+          setFiles(history[history.length - 1].files);
+        } else {
+          // It's flat file array format
+          const flatFiles: VFSFile[] = vfsData.map((f: any) => ({
+            name: f.name || f.path,
+            content: f.content || '',
+            language: f.language || 'tsx',
+          }));
+          setFiles(flatFiles);
           const initialSnapshot: VFSVersionSnapshot = {
             version: 0,
             timestamp: new Date().toISOString(),
-            files: initialFiles,
-            message: "Initial project setup",
+            files: flatFiles,
+            message: "Loaded from project",
           };
           setVfsHistory([initialSnapshot]);
           setCurrentVersionIndex(0);
-          setFiles(initialFiles);
-          // Persist this initial state
-          await supabase
-            .from('projects')
-            .update({ vfs_history: [initialSnapshot], current_vfs_version: 0 })
-            .eq('id', projectId);
         }
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load VFS history.');
-      toast.error('لا يمكن تحميل سجل VFS للمشروع.');
+      setError(err.message || 'Failed to load VFS.');
+      toast.error('لا يمكن تحميل ملفات المشروع.');
     } finally {
       setLoading(false);
     }
-  }, [projectId, supabase, initialFiles]);
+  }, [projectId]);
 
   useEffect(() => {
     loadFilesAndHistory();
   }, [loadFilesAndHistory]);
 
-  // Apply a set of operations to the VFS and create a new version in history
   const applyVFSOperations = useCallback(async (operations: VFSOperation[], message: string = "AI build update") => {
     setLoading(true);
     setError(null);
@@ -102,17 +99,14 @@ export function useVFS({ projectId, initialFiles = [] }: UseVFSProps) {
 
     operations.forEach(op => {
       const fileIndex = newFiles.findIndex(f => f.name === op.path);
-      const fileLanguage = op.path.endsWith('.css') ? 'css' : op.path.endsWith('.tsx') ? 'tsx' : op.path.endsWith('.ts') ? 'ts' : op.path.endsWith('.js') ? 'js' : 'html';
+      const fileLanguage: VFSFile['language'] = op.path.endsWith('.css') ? 'css' : op.path.endsWith('.tsx') ? 'tsx' : op.path.endsWith('.ts') ? 'ts' : op.path.endsWith('.js') ? 'js' : op.path.endsWith('.json') ? 'json' : 'html';
 
-      if (op.action === 'create' && fileIndex === -1) {
+      if ((op.action === 'create') && fileIndex === -1) {
         newFiles.push({ name: op.path, content: op.content || '', language: fileLanguage, version: 0 });
         changed = true;
-      } else if (op.action === 'update' && fileIndex !== -1) {
-        if (newFiles[fileIndex].content !== op.content) {
-          newFiles[fileIndex].content = op.content || '';
-          newFiles[fileIndex].version = (newFiles[fileIndex].version || 0) + 1; // Increment file version
-          changed = true;
-        }
+      } else if ((op.action === 'create' || op.action === 'update') && fileIndex !== -1) {
+        newFiles[fileIndex] = { ...newFiles[fileIndex], content: op.content || '', version: (newFiles[fileIndex].version || 0) + 1 };
+        changed = true;
       } else if (op.action === 'delete' && fileIndex !== -1) {
         newFiles.splice(fileIndex, 1);
         changed = true;
@@ -120,7 +114,6 @@ export function useVFS({ projectId, initialFiles = [] }: UseVFSProps) {
     });
 
     if (changed) {
-      // If we are not at the latest version, truncate future history
       const newHistory = vfsHistory.slice(0, currentVersionIndex + 1);
       const newVersion = currentVersionIndex + 1;
 
@@ -128,7 +121,7 @@ export function useVFS({ projectId, initialFiles = [] }: UseVFSProps) {
         version: newVersion,
         timestamp: new Date().toISOString(),
         files: newFiles,
-        message: message,
+        message,
       };
 
       const updatedHistory = [...newHistory, newSnapshot];
@@ -137,61 +130,37 @@ export function useVFS({ projectId, initialFiles = [] }: UseVFSProps) {
       setVfsHistory(updatedHistory);
       setCurrentVersionIndex(newVersion);
 
-      // Persist changes to the database
       try {
-        const { error } = await supabase
+        const { error: saveError } = await supabase
           .from('projects')
-          .update({ vfs_history: updatedHistory, current_vfs_version: newVersion })
+          .update({ vfs_data: updatedHistory as any })
           .eq('id', projectId);
-        if (error) throw error;
-        toast.success("تم حفظ التغييرات في VFS بنجاح!");
+        if (saveError) throw saveError;
       } catch (err: any) {
         setError(err.message || 'Failed to save VFS changes.');
-        toast.error('فشل حفظ التغييرات في قاعدة البيانات.');
-        // Optionally revert state or reload
-        loadFilesAndHistory(); 
+        toast.error('فشل حفظ التغييرات.');
       }
     }
     setLoading(false);
-  }, [files, projectId, supabase, vfsHistory, currentVersionIndex, loadFilesAndHistory]);
+  }, [files, projectId, vfsHistory, currentVersionIndex]);
 
   const undo = useCallback(async () => {
     if (currentVersionIndex > 0) {
-      const previousVersionIndex = currentVersionIndex - 1;
-      const previousSnapshot = vfsHistory[previousVersionIndex];
-      setFiles(previousSnapshot.files);
-      setCurrentVersionIndex(previousVersionIndex);
-      try {
-        await supabase
-          .from('projects')
-          .update({ current_vfs_version: previousVersionIndex })
-          .eq('id', projectId);
-        toast.info(`تراجع إلى الإصدار ${previousSnapshot.version}: ${previousSnapshot.message}`);
-      } catch (err: any) {
-        setError(err.message || 'Failed to undo VFS.');
-        toast.error('فشل التراجع عن التغييرات.');
-      }
+      const prev = currentVersionIndex - 1;
+      setFiles(vfsHistory[prev].files);
+      setCurrentVersionIndex(prev);
+      toast.info(`تراجع إلى الإصدار ${vfsHistory[prev].version}`);
     }
-  }, [currentVersionIndex, vfsHistory, projectId, supabase]);
+  }, [currentVersionIndex, vfsHistory]);
 
   const redo = useCallback(async () => {
     if (currentVersionIndex < vfsHistory.length - 1) {
-      const nextVersionIndex = currentVersionIndex + 1;
-      const nextSnapshot = vfsHistory[nextVersionIndex];
-      setFiles(nextSnapshot.files);
-      setCurrentVersionIndex(nextVersionIndex);
-      try {
-        await supabase
-          .from('projects')
-          .update({ current_vfs_version: nextVersionIndex })
-          .eq('id', projectId);
-        toast.info(`إعادة تطبيق الإصدار ${nextSnapshot.version}: ${nextSnapshot.message}`);
-      } catch (err: any) {
-        setError(err.message || 'Failed to redo VFS.');
-        toast.error('فشل إعادة تطبيق التغييرات.');
-      }
+      const next = currentVersionIndex + 1;
+      setFiles(vfsHistory[next].files);
+      setCurrentVersionIndex(next);
+      toast.info(`إعادة الإصدار ${vfsHistory[next].version}`);
     }
-  }, [currentVersionIndex, vfsHistory, projectId, supabase]);
+  }, [currentVersionIndex, vfsHistory]);
 
   return {
     files,

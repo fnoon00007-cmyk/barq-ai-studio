@@ -1,6 +1,6 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
 // --- Types and Interfaces ---
@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 export interface ThinkingStep {
   id: string;
   label: string;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'completed' | 'failed' | 'loading';
 }
 
 export interface ChatMessage {
@@ -27,7 +27,6 @@ interface UseBuilderChatProps {
 }
 
 export function useBuilderChat({ userId, projectId }: UseBuilderChatProps) {
-  const supabase = useSupabaseClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -50,28 +49,32 @@ export function useBuilderChat({ userId, projectId }: UseBuilderChatProps) {
         .from('chat_messages')
         .select('*')
         .eq('project_id', projectId)
-        .order('timestamp', { ascending: true });
+        .order('created_at', { ascending: true });
 
       if (error) throw error;
-      setMessages(data.map(m => ({ ...m, timestamp: new Date(m.timestamp) })));
+      if (data) {
+        setMessages(data.map((m: any) => ({ 
+          id: m.id, 
+          role: m.role, 
+          content: m.content, 
+          timestamp: new Date(m.created_at) 
+        })));
+      }
     } catch (err: any) {
       toast.error('فشل تحميل سجل المحادثات.');
     } finally {
       setLoading(false);
     }
-  }, [projectId, supabase]);
+  }, [projectId]);
 
-  // Add a new message to the local state
   const addMessage = useCallback((message: ChatMessage) => {
     setMessages(prev => [...prev, message]);
   }, []);
 
-  // Update a streaming message
   const updateMessage = useCallback((id: string, updates: Partial<ChatMessage>) => {
     setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, ...updates } : msg));
   }, []);
 
-  // Save a message to the database
   const saveMessage = useCallback(async (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
     if (!projectId || !userId) return;
     try {
@@ -87,19 +90,18 @@ export function useBuilderChat({ userId, projectId }: UseBuilderChatProps) {
     } catch (err: any) {
       toast.error('فشل حفظ الرسالة في قاعدة البيانات.');
     }
-  }, [projectId, userId, supabase]);
+  }, [projectId, userId]);
 
-  // Clear all messages
   const clearMessages = useCallback(async () => {
     if (!projectId) return;
     try {
-        const { error } = await supabase.from('chat_messages').delete().eq('project_id', projectId);
-        if(error) throw error;
-        setMessages([]);
-    } catch(err: any) {
-        toast.error("فشل حذف المحادثات السابقة.")
+      const { error } = await supabase.from('chat_messages').delete().eq('project_id', projectId);
+      if (error) throw error;
+      setMessages([]);
+    } catch (err: any) {
+      toast.error("فشل حذف المحادثات السابقة.");
     }
-  }, [projectId, supabase]);
+  }, [projectId]);
 
   useEffect(() => {
     if (projectId) {

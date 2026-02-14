@@ -30,9 +30,9 @@ export function ThinkingEngine({ steps, affectedFiles, dependencyGraph, isComple
         {steps.map((step) => (
           <div key={step.id} className="flex items-center gap-2 text-xs">
             {step.status === "completed" && <Check className="h-3 w-3 text-green-400 shrink-0" />}
-            {step.status === "loading" && <Loader2 className="h-3 w-3 text-accent animate-spin shrink-0" />}
+            {(step.status === "loading" || step.status === "failed") && <Loader2 className="h-3 w-3 text-accent animate-spin shrink-0" />}
             {step.status === "pending" && <Circle className="h-3 w-3 text-muted-foreground shrink-0" />}
-            <span className={step.status === "completed" ? "text-foreground" : step.status === "loading" ? "text-accent" : "text-muted-foreground"}>
+            <span className={step.status === "completed" ? "text-foreground" : (step.status === "loading" || step.status === "failed") ? "text-accent" : "text-muted-foreground"}>
               {step.label}
             </span>
           </div>

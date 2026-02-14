@@ -1,6 +1,6 @@
 import { VFSFile } from "@/hooks/v2/useVFS";
 import { Globe, AlertTriangle } from "lucide-react";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 
 interface PreviewPanelProps {
   files: VFSFile[];
