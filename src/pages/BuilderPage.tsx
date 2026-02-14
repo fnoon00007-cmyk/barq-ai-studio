@@ -7,6 +7,7 @@ import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { supabase } from "@/integrations/supabase/client";
 import { Send, Zap, Bot, User, Info, Plus, PanelLeftClose, PanelLeft, LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor, Github, ExternalLink, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { GitHubExportModal } from "@/components/GitHubExportModal";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ResizableHandle,
@@ -947,58 +948,14 @@ export default function BuilderPage() {
       </div>
 
       {/* GitHub Export Modal */}
-      {showGithubExport && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => !githubExporting && setShowGithubExport(false)}>
-          <div className="bg-card border border-border rounded-2xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-xl bg-secondary flex items-center justify-center">
-                <Github className="h-5 w-5 text-foreground" />
-              </div>
-              <div>
-                <h3 className="font-bold text-foreground">تصدير لـ GitHub</h3>
-                <p className="text-xs text-muted-foreground">اختر طريقة التصدير</p>
-              </div>
-            </div>
-
-            {githubExporting ? (
-              <div className="flex flex-col items-center gap-3 py-8">
-                <Loader2 className="h-8 w-8 text-primary animate-spin" />
-                <p className="text-sm text-muted-foreground">جاري تصدير المشروع...</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <button
-                  onClick={() => handleGithubExport("new")}
-                  className="w-full flex items-center gap-3 p-4 rounded-xl border border-border bg-secondary hover:bg-muted transition-colors text-right"
-                >
-                  <Plus className="h-5 w-5 text-primary shrink-0" />
-                  <div>
-                    <p className="font-bold text-sm text-foreground">ريبو جديد</p>
-                    <p className="text-xs text-muted-foreground">إنشاء ريبو جديد باسم المشروع</p>
-                  </div>
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      const { repos } = await githubExportAction("list_repos", {}, githubToken!);
-                      const repoName = prompt("اختر اسم الريبو:\n" + repos.map((r: any) => r.full_name).join("\n"));
-                      if (repoName) handleGithubExport("existing", repoName);
-                    } catch (err: any) {
-                      toast.error(err.message);
-                    }
-                  }}
-                  className="w-full flex items-center gap-3 p-4 rounded-xl border border-border bg-secondary hover:bg-muted transition-colors text-right"
-                >
-                  <ExternalLink className="h-5 w-5 text-accent shrink-0" />
-                  <div>
-                    <p className="font-bold text-sm text-foreground">ريبو موجود</p>
-                    <p className="text-xs text-muted-foreground">دفع الملفات لريبو موجود</p>
-                  </div>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+      {showGithubExport && githubToken && (
+        <GitHubExportModal
+          open={showGithubExport}
+          onClose={() => setShowGithubExport(false)}
+          githubToken={githubToken}
+          files={files}
+          projectTitle={projectTitle}
+        />
       )}
 
       {/* Review Status Badge */}
