@@ -441,7 +441,7 @@ export default function BuilderPage() {
           <div className="flex items-center gap-1 bg-secondary rounded-lg p-0.5">
             <button
               onClick={() => setMobileView("chat")}
-              className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${
+              className={`px-3 py-1.5 rounded-md text-sm font-bold transition-all ${
                 mobileView === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
               }`}
             >
@@ -449,7 +449,7 @@ export default function BuilderPage() {
             </button>
             <button
               onClick={() => setMobileView("preview")}
-              className={`px-4 py-1.5 rounded-md text-sm font-bold transition-all ${
+              className={`px-3 py-1.5 rounded-md text-sm font-bold transition-all ${
                 mobileView === "preview" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
               }`}
             >
@@ -457,6 +457,15 @@ export default function BuilderPage() {
             </button>
           </div>
           <div className="flex items-center gap-1">
+            {project.files.length > 0 && (
+              <button
+                onClick={() => github.githubToken ? github.setShowGithubExport(true) : github.handleConnectGithub()}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                title="تصدير لـ GitHub"
+              >
+                <Github className="h-4 w-4" />
+              </button>
+            )}
             <button onClick={() => navigate("/projects")} className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground">
               <FolderOpen className="h-4 w-4" />
             </button>

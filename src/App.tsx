@@ -12,6 +12,7 @@ import BuilderPage from "./pages/BuilderPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import BrandSettingsPage from "./pages/BrandSettingsPage";
 import PricingPage from "./pages/PricingPage";
+import ProjectDashboardPage from "./pages/ProjectDashboardPage";
 import PrivacyPage from "./pages/PrivacyPage";
 import TermsPage from "./pages/TermsPage";
 import NotFound from "./pages/NotFound";
@@ -64,6 +65,7 @@ const App = () => (
             <Route path="/auth/github/callback" element={<BuilderPage />} />
             <Route path="/builder/:projectId" element={<BuilderPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
+            <Route path="/project/:projectId" element={<ProjectDashboardPage />} />
             <Route path="/settings" element={<BrandSettingsPage />} />
           </Route>
 

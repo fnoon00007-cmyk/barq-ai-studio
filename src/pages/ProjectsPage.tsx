@@ -177,7 +177,7 @@ export default function ProjectsPage() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                onClick={() => navigate(`/builder/${project.id}`)}
+                onClick={() => navigate(`/project/${project.id}`)}
                 className="group bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 transition-all cursor-pointer"
               >
                 {/* Thumbnail / Preview */}
