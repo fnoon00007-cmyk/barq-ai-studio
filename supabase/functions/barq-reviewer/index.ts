@@ -136,6 +136,9 @@ serve(async (req) => {
     });
 
     let response: Response | null = null;
+    let usedGroq = false;
+
+    // Try Gemini keys first
     for (const key of geminiKeys) {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
@@ -153,13 +156,80 @@ serve(async (req) => {
         break;
       }
       if (res.status === 429) {
-        console.warn("Gemini reviewer key rate-limited, trying fallback...");
+        console.warn("Gemini reviewer key rate-limited, trying next...");
         continue;
       }
-      return new Response(
-        JSON.stringify({ error: "خطأ في المراجعة" }),
-        { status: res.status >= 400 && res.status < 500 ? res.status : 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      console.error("Gemini reviewer error:", res.status);
+      continue;
+    }
+
+    // Fallback to Groq if all Gemini keys failed
+    if (!response) {
+      console.warn("All Gemini keys exhausted for reviewer, falling back to Groq...");
+      const groqKeys = [
+        Deno.env.get("GROQ_API_KEY"),
+        Deno.env.get("GROQ_API_KEY_2"),
+        Deno.env.get("GROQ_API_KEY_3"),
+      ].filter(Boolean) as string[];
+
+      const groqBody = JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: REVIEWER_SYSTEM_PROMPT },
+          { role: "user", content: reviewPrompt },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "review_result",
+              description: "Submit the review result",
+              parameters: {
+                type: "object",
+                properties: {
+                  status: { type: "string", enum: ["approved", "needs_fix"] },
+                  summary_ar: { type: "string", description: "ملخص المراجعة بالعربي للمستخدم" },
+                  issues: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        file: { type: "string" },
+                        issue: { type: "string" },
+                        fix_instruction: { type: "string" },
+                      },
+                      required: ["file", "issue", "fix_instruction"],
+                    },
+                  },
+                  fix_prompt: { type: "string", description: "A combined English prompt for the builder to fix all issues. Only if status is needs_fix." },
+                },
+                required: ["status", "summary_ar", "issues"],
+              },
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "review_result" } },
+      });
+
+      for (const gKey of groqKeys) {
+        const gRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${gKey}`, "Content-Type": "application/json" },
+          body: groqBody,
+        });
+        if (gRes.ok) {
+          response = gRes;
+          usedGroq = true;
+          console.log("Groq reviewer fallback succeeded");
+          break;
+        }
+        if (gRes.status === 429) {
+          console.warn("Groq reviewer key rate-limited, trying next...");
+          continue;
+        }
+        console.error("Groq reviewer error:", gRes.status);
+        continue;
+      }
     }
 
     if (!response) {
