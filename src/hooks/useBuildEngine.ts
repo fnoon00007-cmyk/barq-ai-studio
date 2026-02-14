@@ -84,8 +84,23 @@ export function useBuildEngine({
               if (!affectedFiles.includes(path)) affectedFiles.push(path);
               updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
             },
+            onFileChunk: (path, chunk) => {
+              // The edge function sends full content in file_chunk, accumulate it
+              const existing = pendingOps.find(op => op.path === path);
+              if (existing) {
+                existing.content += chunk;
+              } else {
+                pendingOps.push({ path, action: "create", content: chunk, language: path.endsWith(".css") ? "css" : "tsx" });
+              }
+            },
             onFileDone: (path, fileContent) => {
-              pendingOps.push({ path, action: "create", content: fileContent, language: path.endsWith(".css") ? "css" : "tsx" });
+              // Also handle file_done if sent
+              const existing = pendingOps.find(op => op.path === path);
+              if (existing) {
+                existing.content = fileContent;
+              } else {
+                pendingOps.push({ path, action: "create", content: fileContent, language: path.endsWith(".css") ? "css" : "tsx" });
+              }
             },
             onMessageDelta: (text) => {
               assistantContent += text;
@@ -125,8 +140,15 @@ export function useBuildEngine({
                         { buildPrompt: fixPrompt, projectId: null, dependencyGraph: null, existingFiles: pendingOps.map(f => ({ path: f.path, content: f.content })) },
                         {
                         onFileStart: (path) => addLogEntry("update", `إصلاح ${path}...`),
+                        onFileChunk: (path, chunk) => {
+                          const existing = fixOps.find(op => op.path === path);
+                          if (existing) { existing.content += chunk; }
+                          else { fixOps.push({ path, action: "update", content: chunk, language: path.endsWith(".css") ? "css" : "tsx" }); }
+                        },
                         onFileDone: (path, content) => {
-                          fixOps.push({ path, action: "update", content, language: path.endsWith(".css") ? "css" : "tsx" });
+                          const existing = fixOps.find(op => op.path === path);
+                          if (existing) { existing.content = content; }
+                          else { fixOps.push({ path, action: "update", content, language: path.endsWith(".css") ? "css" : "tsx" }); }
                         },
                         onDone: () => {
                           if (fixOps.length > 0) {
