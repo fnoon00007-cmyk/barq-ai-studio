@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Globe, Palette, Cpu, Code, Sparkles, Send } from "lucide-react";
+import { Globe, Palette, Cpu, Code, Sparkles, Send, ArrowLeft, Layers } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { useNavigate } from "react-router-dom";
+import { getFeaturedTemplates, CATEGORY_LABELS, TEMPLATES } from "@/lib/templates-data";
 
 const features = [
   { icon: Cpu, title: "ذكاء اصطناعي سعودي", desc: "يحاورك بلهجتك ويفهم احتياجك بالضبط" },
@@ -11,7 +12,7 @@ const features = [
   { icon: Sparkles, title: "تفكير ذكي", desc: "يعرض لك خطوات تفكيره أثناء البناء" },
 ];
 
-const templates = [
+const quickTemplates = [
   { label: "موقع مطعم 🍕", prompt: "أبي موقع لمطعم سعودي فخم" },
   { label: "متجر إلكتروني 🛒", prompt: "أبي متجر إلكتروني لبيع الملابس" },
   { label: "محفظة أعمال 💼", prompt: "أبي محفظة أعمال شخصية احترافية" },
@@ -50,6 +51,9 @@ export default function LandingPage() {
             <span className="font-bold text-lg text-foreground">برق Ai</span>
           </div>
           <div className="hidden sm:flex items-center gap-6">
+            <button onClick={() => navigate("/templates")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              القوالب
+            </button>
             <button onClick={() => navigate("/pricing")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               الأسعار
             </button>
@@ -115,9 +119,9 @@ export default function LandingPage() {
             </div>
           </div>
 
-          {/* Templates */}
+          {/* Quick Templates */}
           <div className="flex flex-wrap gap-2 justify-center mt-6">
-            {templates.map((t) => (
+            {quickTemplates.map((t) => (
               <button
                 key={t.label}
                 onClick={() => handleTemplateClick(t.prompt)}
@@ -151,7 +155,49 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* CTA */}
+      {/* Featured Templates Section */}
+      <section className="relative z-10 py-20 px-4 bg-muted/30">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-12">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 text-accent-foreground text-sm font-bold mb-4">
+              <Layers className="h-4 w-4" />
+              قوالب جاهزة
+            </div>
+            <h2 className="text-3xl font-bold text-foreground mb-3">قوالب <span className="text-primary">شهيرة</span></h2>
+            <p className="text-muted-foreground text-lg">اختر قالب واحد وابدأ البناء فوراً</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
+            {getFeaturedTemplates().map((t) => (
+              <div
+                key={t.id}
+                onClick={() => navigate(`/builder?prompt=${encodeURIComponent(t.prompt)}`)}
+                className="bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/40 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300 cursor-pointer group"
+              >
+                <div
+                  className="h-36 flex items-center justify-center"
+                  style={{ background: `linear-gradient(135deg, ${t.colors.primary}22, ${t.colors.secondary}33)` }}
+                >
+                  <span className="text-5xl group-hover:scale-110 transition-transform duration-300">{t.icon}</span>
+                </div>
+                <div className="p-4">
+                  <h3 className="font-bold text-foreground mb-1">{t.title}</h3>
+                  <p className="text-sm text-muted-foreground line-clamp-2">{t.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-center">
+            <button
+              onClick={() => navigate("/templates")}
+              className="px-8 py-3 rounded-xl border border-border bg-card text-foreground font-bold hover:border-primary/40 hover:bg-card/80 transition-all flex items-center gap-2 mx-auto"
+            >
+              <Layers className="h-4 w-4" />
+              تصفح جميع القوالب ({TEMPLATES.length})
+            </button>
+          </div>
+        </div>
+      </section>
+
       <section className="relative z-10 py-20 px-4">
         <div className="max-w-2xl mx-auto text-center bg-card border border-border rounded-3xl p-12">
           <div className="mx-auto mb-5"><BarqLogo size={48} /></div>
