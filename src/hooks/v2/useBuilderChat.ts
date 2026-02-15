@@ -115,6 +115,7 @@ export function useBuilderChat({ userId, projectId }: UseBuilderChatProps) {
 
   return {
     messages,
+    setMessages,
     input,
     loadingMessages: loading,
     messagesEndRef,

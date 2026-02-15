@@ -1,8 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/v2/PreviewPanel";
 import { PreviewErrorBoundary } from "@/components/v2/PreviewErrorBoundary";
 import { GitHubExportModal } from "@/components/GitHubExportModal";
+import { PromptTemplates } from "@/components/PromptTemplates";
+import { ExpandableMessage } from "@/components/ExpandableMessage";
+import { DynamicTypingIndicator } from "@/components/DynamicTypingIndicator";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useBuilderChat } from "@/hooks/v2/useBuilderChat";
 import { useBuildEngine } from "@/hooks/v2/useBuildEngine";
@@ -13,7 +16,7 @@ import {
   Send, Zap, Bot, User, Plus, PanelLeftClose, PanelLeft,
   LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor,
   Github, Loader2, CheckCircle2, AlertCircle, Undo2, Redo2,
-  Eye, MessageCircle, MoreVertical, ArrowRight,
+  Eye, MessageCircle, MoreVertical, ArrowRight, Square, Trash2,
 } from "lucide-react";
 import {
   ResizableHandle,
@@ -42,6 +45,7 @@ export default function BuilderPage() {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const promptSentRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [projectTitle, setProjectTitle] = useState("مشروع جديد");
@@ -108,13 +112,7 @@ export default function BuilderPage() {
     }
   }, [searchParams, userId, chat.loadingMessages, currentProjectId]);
 
-  // Auto-switch to preview on mobile when build completes
-  useEffect(() => {
-    if (isMobile && vfs.files.length > 0 && !engine.state.isBuilding && !engine.state.isThinking) {
-      // Don't auto-switch, but show notification
-    }
-  }, [vfs.files.length, engine.state.isBuilding, isMobile]);
-
+  // Smooth auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat.messages, engine.state.isThinking]);
@@ -129,10 +127,100 @@ export default function BuilderPage() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
   };
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Ctrl+L → clear chat
+      if (e.ctrlKey && e.key === "l") {
+        e.preventDefault();
+        chat.clearMessages();
+        toast.success("تم مسح المحادثة");
+      }
+      // Esc → stop build
+      if (e.key === "Escape" && (engine.state.isThinking || engine.state.isBuilding)) {
+        e.preventDefault();
+        engine.handleAbort();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [chat.clearMessages, engine.state.isThinking, engine.state.isBuilding, engine.handleAbort]);
+
+  // Undo last user message
+  const handleUndoLastMessage = useCallback(() => {
+    const lastUserMsgIndex = [...chat.messages].reverse().findIndex(m => m.role === "user");
+    if (lastUserMsgIndex === -1) return;
+    const actualIndex = chat.messages.length - 1 - lastUserMsgIndex;
+    // Remove last user message and any assistant response after it
+    const newMessages = chat.messages.slice(0, actualIndex);
+    chat.setMessages(newMessages);
+    toast.success("تم حذف آخر رسالة");
+  }, [chat.messages, chat.setMessages]);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate("/");
   };
+
+  const isActive = engine.state.isThinking || engine.state.isBuilding;
+  const lastUserMsgId = [...chat.messages].reverse().find(m => m.role === "user")?.id;
+
+  // Shared empty state component
+  const EmptyState = ({ compact = false }: { compact?: boolean }) => (
+    <div className={`flex flex-col items-center text-center gap-4 ${compact ? "py-8" : "py-12"}`}>
+      <div className={`rounded-2xl bg-secondary border border-border flex items-center justify-center animate-pulse-glow ${compact ? "w-14 h-14" : "w-16 h-16"}`}>
+        <Zap className={`text-primary ${compact ? "h-7 w-7" : "h-8 w-8"}`} />
+      </div>
+      <div>
+        <h2 className={`font-bold text-foreground mb-1 ${compact ? "text-base" : "text-lg"}`}>مرحباً بك في برق ⚡</h2>
+        <p className="text-sm text-muted-foreground">اختر قالب جاهز أو اكتب وصف موقعك</p>
+      </div>
+      <div className="w-full max-w-md">
+        <p className="text-xs text-muted-foreground mb-2 font-bold">📋 قوالب جاهزة</p>
+        <PromptTemplates onSelect={(p) => engine.handleSendMessage(p)} compact={compact} />
+      </div>
+    </div>
+  );
+
+  // Shared message renderer
+  const renderMessage = (msg: typeof chat.messages[0], compact = false) => (
+    <div key={msg.id} className="animate-slide-up group">
+      <div className={`flex gap-${compact ? "2" : "3"} ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+        <div className={`${compact ? "w-7 h-7" : "w-8 h-8"} rounded-lg flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-primary/20" : "bg-accent/20"}`}>
+          {msg.role === "user" ? <User className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} text-primary`} /> : <Bot className={`${compact ? "h-3.5 w-3.5" : "h-4 w-4"} text-accent`} />}
+        </div>
+        <div className={`max-w-[85%] rounded-2xl px-${compact ? "3" : "4"} py-${compact ? "2.5" : "3"} text-sm leading-relaxed relative ${msg.role === "user" ? "bg-primary/15 text-foreground" : "bg-secondary text-secondary-foreground"}`}>
+          <div>
+            {msg.content && msg.content.length > 300 ? (
+              <ExpandableMessage content={msg.content} />
+            ) : (
+              <span className="whitespace-pre-wrap">{msg.content}</span>
+            )}
+            {msg.isStreaming && !msg.content && (
+              <span className="inline-flex gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-1" />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-2" />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-3" />
+              </span>
+            )}
+          </div>
+          {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length || msg.pipelineStage) ? (
+            <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} pipelineStage={msg.pipelineStage} handoffPrompt={msg.handoffPrompt} />
+          ) : null}
+          {/* Undo button for last user message */}
+          {msg.role === "user" && msg.id === lastUserMsgId && !isActive && (
+            <button
+              onClick={handleUndoLastMessage}
+              className="absolute -bottom-2 left-0 opacity-0 group-hover:opacity-100 transition-opacity bg-destructive/10 text-destructive hover:bg-destructive/20 rounded-full p-1"
+              title="حذف الرسالة"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 
   // ===== MOBILE LAYOUT =====
   if (isMobile) {
@@ -192,7 +280,7 @@ export default function BuilderPage() {
           {mobileView === "chat" ? (
             <div className="flex flex-col h-full">
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-3 scroll-smooth">
                 {chat.loadingMessages ? (
                   <div className="space-y-4 px-1 py-6">
                     {[1, 2, 3].map((i) => (
@@ -203,52 +291,10 @@ export default function BuilderPage() {
                     ))}
                   </div>
                 ) : chat.messages.length === 0 ? (
-                  <div className="flex flex-col items-center text-center gap-4 py-12">
-                    <div className="w-14 h-14 rounded-2xl bg-secondary border border-border flex items-center justify-center">
-                      <Zap className="h-7 w-7 text-primary" />
-                    </div>
-                    <div>
-                      <h2 className="text-base font-bold text-foreground mb-1">مرحباً بك في برق ⚡</h2>
-                      <p className="text-sm text-muted-foreground">وصف موقعك وسأبنيه لك</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2 justify-center">
-                      {["موقع مطعم 🍕", "متجر إلكتروني 🛒", "محفظة أعمال 💼"].map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => engine.handleSendMessage(`أبي ${s}`)}
-                          className="text-xs px-3 py-2 rounded-xl border border-border bg-secondary text-secondary-foreground active:bg-secondary/80"
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  <EmptyState compact />
                 ) : null}
 
-                {chat.messages.map((msg) => (
-                  <div key={msg.id}>
-                    <div className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-primary/20" : "bg-accent/20"}`}>
-                        {msg.role === "user" ? <User className="h-3.5 w-3.5 text-primary" /> : <Bot className="h-3.5 w-3.5 text-accent" />}
-                      </div>
-                      <div className={`max-w-[82%] rounded-2xl px-3 py-2.5 text-sm leading-relaxed ${msg.role === "user" ? "bg-primary/15 text-foreground" : "bg-secondary text-secondary-foreground"}`}>
-                        <div className="whitespace-pre-wrap">
-                          {msg.content}
-                          {msg.isStreaming && !msg.content && (
-                            <span className="inline-flex gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-1" />
-                              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-2" />
-                              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-typing-dot-3" />
-                            </span>
-                          )}
-                        </div>
-                        {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length || msg.pipelineStage) ? (
-                          <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} pipelineStage={msg.pipelineStage} handoffPrompt={msg.handoffPrompt} />
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                {chat.messages.map((msg) => renderMessage(msg, true))}
 
                 {/* Build button */}
                 {engine.state.buildPrompt && !engine.state.isBuilding && !engine.state.isThinking && (
@@ -278,11 +324,7 @@ export default function BuilderPage() {
                   </div>
                 )}
 
-                {(engine.state.isThinking || engine.state.isBuilding) && (
-                  <div className="flex items-center justify-center py-3">
-                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                  </div>
-                )}
+                {isActive && <DynamicTypingIndicator isBuilding={engine.state.isBuilding} />}
 
                 <div ref={messagesEndRef} />
               </div>
@@ -290,6 +332,15 @@ export default function BuilderPage() {
               {/* Mobile Input */}
               <div className="shrink-0 p-3 border-t border-border bg-card">
                 <div className="flex items-center gap-2">
+                  {isActive && (
+                    <button
+                      onClick={engine.handleAbort}
+                      className="w-10 h-10 rounded-xl bg-destructive/15 text-destructive flex items-center justify-center shrink-0 hover:bg-destructive/25 transition-colors"
+                      title="إيقاف البناء"
+                    >
+                      <Square className="h-4 w-4" />
+                    </button>
+                  )}
                   <textarea
                     value={chat.input}
                     onChange={(e) => chat.setInput(e.target.value)}
@@ -297,16 +348,17 @@ export default function BuilderPage() {
                     placeholder="اكتب رسالتك..."
                     rows={1}
                     className="flex-1 p-2.5 rounded-xl border border-border bg-background text-foreground text-sm resize-none focus:outline-none focus:ring-1 focus:ring-primary/50"
-                    disabled={engine.state.isThinking || engine.state.isBuilding}
+                    disabled={isActive}
                   />
                   <button
                     onClick={handleSubmit}
-                    disabled={!chat.input.trim() || engine.state.isThinking || engine.state.isBuilding}
+                    disabled={!chat.input.trim() || isActive}
                     className="w-10 h-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shrink-0 disabled:opacity-40"
                   >
                     <Send className="h-4 w-4" />
                   </button>
                 </div>
+                <p className="text-[9px] text-muted-foreground mt-1 text-center">Esc لإيقاف · Ctrl+L لمسح المحادثة</p>
               </div>
             </div>
           ) : (
@@ -372,7 +424,7 @@ export default function BuilderPage() {
     );
   }
 
-  // ===== DESKTOP LAYOUT (unchanged logic) =====
+  // ===== DESKTOP LAYOUT =====
   const chatPanel = (
     <div className="flex flex-col h-full bg-card">
       {/* Header */}
@@ -436,7 +488,7 @@ export default function BuilderPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto scroll-smooth" ref={messagesContainerRef}>
         {activeTab === "chat" ? (
           <div className="px-4 py-4 space-y-4">
             {chat.loadingMessages ? (
@@ -444,48 +496,10 @@ export default function BuilderPage() {
                 <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
               </div>
             ) : chat.messages.length === 0 ? (
-              <div className="flex flex-col items-center text-center gap-5 py-16">
-                <div className="w-16 h-16 rounded-2xl bg-secondary border border-border flex items-center justify-center animate-pulse-glow">
-                  <Zap className="h-8 w-8 text-accent" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-bold text-foreground mb-2">مرحباً بك في برق ⚡</h2>
-                  <p className="text-sm text-muted-foreground max-w-sm mx-auto leading-relaxed">أخبرني عن مشروعك وسأساعدك في بناء موقع احترافي</p>
-                </div>
-                <div className="flex flex-wrap gap-2 justify-center">
-                  {["أبي موقع لمطعم 🍕", "أبي متجر إلكتروني 🛒", "أبي محفظة أعمال 💼"].map((s) => (
-                    <button key={s} onClick={() => engine.handleSendMessage(s)} className="text-sm px-4 py-2 rounded-xl border border-border bg-secondary text-secondary-foreground hover:border-primary/50 hover:bg-secondary/80 transition-all">
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <EmptyState />
             ) : null}
 
-            {chat.messages.map((msg) => (
-              <div key={msg.id} className="animate-slide-up">
-                <div className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${msg.role === "user" ? "bg-primary/20" : "bg-accent/20"}`}>
-                    {msg.role === "user" ? <User className="h-4 w-4 text-primary" /> : <Bot className="h-4 w-4 text-accent" />}
-                  </div>
-                  <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${msg.role === "user" ? "bg-primary/15 text-foreground" : "bg-secondary text-secondary-foreground"}`}>
-                    <div className="whitespace-pre-wrap">
-                      {msg.content}
-                      {msg.isStreaming && !msg.content && (
-                        <span className="inline-flex gap-1">
-                          <span className="w-2 h-2 rounded-full bg-primary animate-typing-dot-1" />
-                          <span className="w-2 h-2 rounded-full bg-primary animate-typing-dot-2" />
-                          <span className="w-2 h-2 rounded-full bg-primary animate-typing-dot-3" />
-                        </span>
-                      )}
-                    </div>
-                    {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length || msg.pipelineStage) ? (
-                      <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} pipelineStage={msg.pipelineStage} handoffPrompt={msg.handoffPrompt} />
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ))}
+            {chat.messages.map((msg) => renderMessage(msg))}
 
             {engine.state.buildPrompt && !engine.state.isBuilding && !engine.state.isThinking && (
               <div className="flex justify-center animate-slide-up">
@@ -513,11 +527,7 @@ export default function BuilderPage() {
               </div>
             )}
 
-            {(engine.state.isThinking || engine.state.isBuilding) && (
-              <div className="flex items-center justify-center py-4">
-                <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              </div>
-            )}
+            {isActive && <DynamicTypingIndicator isBuilding={engine.state.isBuilding} />}
 
             {vfs.currentVersion && (
               <div className="text-xs text-muted-foreground text-center mt-4">
@@ -528,13 +538,24 @@ export default function BuilderPage() {
             {/* Chat Input */}
             <div className="sticky bottom-0 bg-card pt-4 border-t border-border">
               <div className="flex items-center gap-2">
-                <textarea value={chat.input} onChange={(e) => chat.setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="اكتب رسالتك هنا..." rows={1} className="flex-1 p-3 rounded-lg border border-border bg-background text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50" />
-                <button onClick={handleSubmit} disabled={!chat.input.trim() || engine.state.isThinking || engine.state.isBuilding} className="w-10 h-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                {isActive && (
+                  <button
+                    onClick={engine.handleAbort}
+                    className="w-10 h-10 rounded-lg bg-destructive/15 text-destructive flex items-center justify-center shrink-0 hover:bg-destructive/25 transition-colors"
+                    title="إيقاف البناء (Esc)"
+                  >
+                    <Square className="h-5 w-5" />
+                  </button>
+                )}
+                <textarea value={chat.input} onChange={(e) => chat.setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="اكتب رسالتك هنا..." rows={1} className="flex-1 p-3 rounded-lg border border-border bg-background text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50" disabled={isActive} />
+                <button onClick={handleSubmit} disabled={!chat.input.trim() || isActive} className="w-10 h-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                   <Send className="h-5 w-5" />
                 </button>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-1 text-center">برق AI يمكنه ارتكاب الأخطاء. تحقق من المعلومات المهمة.</p>
+              <p className="text-[10px] text-muted-foreground mt-1 text-center">Enter للإرسال · Esc لإيقاف البناء · Ctrl+L لمسح المحادثة</p>
             </div>
+
+            <div ref={messagesEndRef} />
           </div>
         ) : activeTab === "code" ? (
           <div className="h-full">
