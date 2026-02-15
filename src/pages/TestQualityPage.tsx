@@ -569,6 +569,13 @@ export default function TestQualityPage() {
                   total_lines: totalLines,
                   avg_lines_per_file: result.files.length > 0 ? Math.round(totalLines / result.files.length) : 0,
                   files_summary: result.files.map(f => ({ name: f.name, lines: f.lines, grade: f.grade })),
+                  files_data: files.map(f => ({
+                    name: f.name,
+                    content: f.content,
+                    lines: f.content.split('\n').length,
+                    language: f.language || 'tsx',
+                    grade: result.files.find(rf => rf.name === f.name)?.grade || 'F',
+                  })),
                   model_used: "gemini",
                   validation_retries: 0,
                   issues: result.issues,

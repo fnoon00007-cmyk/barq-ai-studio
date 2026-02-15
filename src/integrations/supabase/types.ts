@@ -56,6 +56,7 @@ export type Database = {
           completeness_score: number
           created_at: string
           files_count: number
+          files_data: Json
           files_summary: Json
           id: string
           interactivity_score: number
@@ -79,6 +80,7 @@ export type Database = {
           completeness_score?: number
           created_at?: string
           files_count?: number
+          files_data?: Json
           files_summary?: Json
           id?: string
           interactivity_score?: number
@@ -102,6 +104,7 @@ export type Database = {
           completeness_score?: number
           created_at?: string
           files_count?: number
+          files_data?: Json
           files_summary?: Json
           id?: string
           interactivity_score?: number
