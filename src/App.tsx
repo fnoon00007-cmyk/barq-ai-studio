@@ -19,6 +19,7 @@ const ProjectDashboardPage = lazy(() => import("./pages/ProjectDashboardPage"));
 const PrivacyPage = lazy(() => import("./pages/PrivacyPage"));
 const TermsPage = lazy(() => import("./pages/TermsPage"));
 const TemplatesPage = lazy(() => import("./pages/TemplatesPage"));
+const PublicPreviewPage = lazy(() => import("./pages/PublicPreviewPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient({
@@ -69,6 +70,7 @@ const App = () => (
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />
             <Route path="/templates" element={<TemplatesPage />} />
+            <Route path="/preview/:shareId" element={<PublicPreviewPage />} />
             
             {/* Protected routes */}
             <Route element={<AuthGuard />}>

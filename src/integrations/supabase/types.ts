@@ -109,12 +109,49 @@ export type Database = {
         }
         Relationships: []
       }
+      project_comments: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          project_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          project_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          project_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_comments_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           created_at: string
           description: string | null
           id: string
           preview_html: string | null
+          share_enabled: boolean
+          share_id: string | null
           status: string | null
           thumbnail_url: string | null
           title: string
@@ -127,6 +164,8 @@ export type Database = {
           description?: string | null
           id?: string
           preview_html?: string | null
+          share_enabled?: boolean
+          share_id?: string | null
           status?: string | null
           thumbnail_url?: string | null
           title: string
@@ -139,6 +178,8 @@ export type Database = {
           description?: string | null
           id?: string
           preview_html?: string | null
+          share_enabled?: boolean
+          share_id?: string | null
           status?: string | null
           thumbnail_url?: string | null
           title?: string
