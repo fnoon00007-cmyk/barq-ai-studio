@@ -137,53 +137,120 @@ async function tryKeys(keys: string[], url: string, body: string, label: string)
   return null;
 }
 
-// ─── Call AI for a single phase with retry + early termination ───
+// ─── Pre-Generation Validation ───
+const REQUIRED_LINES: Record<string, number> = {
+  'Header.tsx': 250, 'Hero.tsx': 300, 'Services.tsx': 300, 'About.tsx': 250,
+  'Stats.tsx': 200, 'Testimonials.tsx': 250, 'CTA.tsx': 150, 'Contact.tsx': 300,
+  'Footer.tsx': 250, 'styles.css': 80, 'App.tsx': 50,
+};
+
+function validateGeneratedFiles(result: any): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const ops = result?.vfs_operations;
+  if (!Array.isArray(ops) || ops.length === 0) return { valid: false, errors: ['لم يتم توليد أي ملفات'] };
+
+  for (const op of ops) {
+    const content = op.content || '';
+    const lines = content.split('\n').length;
+    const required = REQUIRED_LINES[op.path];
+    if (required && lines < required) errors.push(`${op.path}: ${lines} سطر (المطلوب ${required}+)`);
+
+    if (op.path.endsWith('.tsx')) {
+      const arabicChars = (content.match(/[\u0600-\u06FF]/g) || []).length;
+      const totalChars = content.replace(/\s/g, '').length;
+      if (totalChars > 0 && arabicChars / totalChars < 0.10) {
+        errors.push(`${op.path}: نسبة العربي ${Math.round((arabicChars / totalChars) * 100)}% (المطلوب 10%+)`);
+      }
+    }
+
+    for (const pattern of ['// TODO', '// Add content', '// ...', '// rest of code', 'placeholder']) {
+      if (content.includes(pattern)) errors.push(`${op.path}: يحتوي على "${pattern}"`);
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+// ─── Call AI for a single phase with retry + validation + early termination ───
 const MAX_RETRIES = 3;
-const RETRY_DELAYS = [10000, 20000, 40000]; // Reduced delays for faster recovery
+const RETRY_DELAYS = [10000, 20000, 40000];
+const MAX_VALIDATION_RETRIES = 1;
 
 async function callAIForPhase(
   messages: Array<{role: string; content: string}>,
   toolsDef: any[],
   geminiKeys: string[], groqKeys: string[], lovableKey: string | undefined
 ): Promise<any | null> {
-  const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
-  const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const waitMs = RETRY_DELAYS[attempt - 1] || 40000;
-      console.log(`[retry] Attempt ${attempt + 1}/${MAX_RETRIES + 1} — waiting ${waitMs / 1000}s...`);
-      await delay(waitMs);
-    }
+  async function doCall(msgs: Array<{role: string; content: string}>): Promise<any | null> {
+    const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages: msgs, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+    const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages: msgs, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
 
-    let response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini");
-    if (!response) response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq");
-    if (!response && lovableKey) {
-      const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
-      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" }, body: lb });
-      if (res.ok) response = res;
-    }
-
-    if (response) {
-      const args = await collectStreamedToolCall(response);
-      if (args) {
-        try {
-          const parsed = JSON.parse(args);
-          // Early termination: if we got valid files, return immediately
-          if (parsed?.vfs_operations?.length > 0) {
-            console.log(`[callAI] ✅ Got ${parsed.vfs_operations.length} files, early termination`);
-            return parsed;
-          }
-        } catch { console.error("[parse] Failed to parse tool call args"); }
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const waitMs = RETRY_DELAYS[attempt - 1] || 40000;
+        console.log(`[retry] Attempt ${attempt + 1}/${MAX_RETRIES + 1} — waiting ${waitMs / 1000}s...`);
+        await delay(waitMs);
       }
-      console.warn("[stream] No valid tool call args, retrying...");
-      continue;
+
+      let response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini");
+      if (!response) response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq");
+      if (!response && lovableKey) {
+        const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages: msgs, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+        const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" }, body: lb });
+        if (res.ok) response = res;
+      }
+
+      if (response) {
+        const args = await collectStreamedToolCall(response);
+        if (args) {
+          try {
+            const parsed = JSON.parse(args);
+            if (parsed?.vfs_operations?.length > 0) {
+              console.log(`[callAI] ✅ Got ${parsed.vfs_operations.length} files`);
+              return parsed;
+            }
+          } catch { console.error("[parse] Failed to parse tool call args"); }
+        }
+        console.warn("[stream] No valid tool call args, retrying...");
+        continue;
+      }
+      console.warn(`[retry] All providers failed on attempt ${attempt + 1}`);
     }
-    console.warn(`[retry] All providers failed on attempt ${attempt + 1}`);
+    return null;
   }
 
-  console.error("[callAI] All retries exhausted");
-  return null;
+  // First attempt
+  let result = await doCall(messages);
+  if (!result) return null;
+
+  // Validate
+  const validation = validateGeneratedFiles(result);
+  if (validation.valid) {
+    console.log('✅ Validation PASSED');
+    return result;
+  }
+
+  console.warn('❌ Validation FAILED:', validation.errors);
+
+  // Retry with correction prompt
+  for (let retry = 0; retry < MAX_VALIDATION_RETRIES; retry++) {
+    console.log(`🔄 Validation retry ${retry + 1}/${MAX_VALIDATION_RETRIES}...`);
+    const retryPrompt = [
+      '❌ VALIDATION FAILED — YOUR PREVIOUS OUTPUT WAS REJECTED.',
+      'Issues:', ...validation.errors.map(e => '- ' + e),
+      '', 'REGENERATE with 200-500 lines per component, 10%+ Arabic, NO placeholders.',
+    ].join('\n');
+
+    result = await doCall([...messages, { role: 'assistant', content: 'I will regenerate.' }, { role: 'user', content: retryPrompt }]);
+    if (!result) return null;
+
+    const rv = validateGeneratedFiles(result);
+    if (rv.valid) { console.log('✅ Validation PASSED on retry'); return result; }
+    console.warn('❌ Still failed on retry:', rv.errors);
+  }
+
+  console.warn('⚠️ Returning result despite validation failures');
+  return result;
 }
 
 // ─── MAIN HANDLER ───
