@@ -278,10 +278,17 @@ export function useBuildEngine({
   }, [applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject]);
 
   // --- Check for active/completed server-side builds on mount AND on tab focus ---
+  const appliedJobIdsRef = useRef<Set<string>>(new Set());
+  const checkingRef = useRef(false);
+
   useEffect(() => {
     if (!userId) return;
     
     const checkActiveBuilds = async () => {
+      // Prevent concurrent checks
+      if (checkingRef.current) return;
+      checkingRef.current = true;
+
       try {
         // Check for active builds
         const { data: activeJobs } = await supabase
@@ -296,9 +303,18 @@ export function useBuildEngine({
           const job = activeJobs[0];
           
           // Prevent duplicate reconnections to the same job
-          if (connectedJobIdRef.current === job.id) return;
+          if (connectedJobIdRef.current === job.id) { checkingRef.current = false; return; }
           connectedJobIdRef.current = job.id;
           
+          // Check for stale builds (no update for 5 minutes)
+          const lastUpdate = new Date(job.updated_at).getTime();
+          if (Date.now() - lastUpdate > 5 * 60 * 1000) {
+            console.warn("[build] Stale build detected, marking as failed:", job.id);
+            await supabase.from("build_jobs").update({ status: "failed_timeout" }).eq("id", job.id);
+            checkingRef.current = false;
+            return;
+          }
+
           dispatch({ type: "SET_STATUS", payload: { isBuilding: true, isThinking: true, activeJobId: job.id, serverSideBuild: true } });
           
           const curPhase = getCurrentPhaseFromStatus(job.status);
@@ -329,6 +345,7 @@ export function useBuildEngine({
           
           subscribeToJob(job.id, assistantMsgId);
           toast.info("🔄 متصل ببناء سيرفري جاري — يمكنك إغلاق المتصفح بأمان");
+          checkingRef.current = false;
           return;
         }
 
@@ -343,11 +360,17 @@ export function useBuildEngine({
 
         if (completedJobs && completedJobs.length > 0) {
           const job = completedJobs[0];
+          
+          // Skip if already applied this session
+          if (appliedJobIdsRef.current.has(job.id)) { checkingRef.current = false; return; }
+          
           const completedAt = new Date(job.completed_at || job.updated_at).getTime();
           const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
           
           // Only auto-apply if completed recently (within 5 minutes)
-          if (completedAt > fiveMinutesAgo && !state.isBuilding) {
+          if (completedAt > fiveMinutesAgo) {
+            appliedJobIdsRef.current.add(job.id);
+            
             const allFiles = extractFilesFromJob(job);
             if (allFiles.length > 0) {
               const ops = allFiles.map((f: any) => ({
@@ -373,6 +396,8 @@ export function useBuildEngine({
         }
       } catch (err) {
         console.warn("Failed to check active builds:", err);
+      } finally {
+        checkingRef.current = false;
       }
     };
 
@@ -386,7 +411,8 @@ export function useBuildEngine({
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [userId, addMessage, subscribeToJob, applyVFSOperations, saveProject, saveMessage]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   // --- Phase 1: Strategic Planning (Gemini 2.0 Flash Thinking) ---
   const handleSendMessage = useCallback(async (content: string, isFixAttempt: boolean = false) => {
