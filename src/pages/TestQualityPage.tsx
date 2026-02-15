@@ -1,9 +1,9 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight, FlaskConical, FileCode2, BarChart3, Code2,
   ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, XCircle,
-  Sparkles, Lightbulb, Loader2, Bug, Timer
+  Sparkles, Lightbulb, Loader2, Bug, Timer, RotateCcw, Play
 } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { validateCodeQuality, type CodeQualityReport, type VFSFile } from "@/lib/code-validator";
@@ -141,9 +141,7 @@ function StatusIcon({ lines }: { lines: number }) {
   return <XCircle className="h-4 w-4 text-destructive" />;
 }
 
-// ─── Main page ───
-
-// Phase progress indicator component
+// Phase progress indicator
 function PhaseProgressBar({ currentPhase, completedPhases }: { currentPhase: number; completedPhases: number[] }) {
   return (
     <div className="mb-6 p-5 rounded-2xl bg-muted/50 border border-border">
@@ -188,6 +186,25 @@ function PhaseProgressBar({ currentPhase, completedPhases }: { currentPhase: num
   );
 }
 
+// ─── Types for build job persistence ───
+interface BuildJob {
+  id: string;
+  prompt: string;
+  build_prompt: string | null;
+  dependency_graph: any;
+  status: string;
+  current_phase: number;
+  phase_1_files: VFSFile[] | null;
+  phase_2_files: VFSFile[] | null;
+  phase_3_files: VFSFile[] | null;
+  phase_4_files: VFSFile[] | null;
+  quality_score: number | null;
+  quality_report: any;
+  started_at: string;
+  completed_at: string | null;
+}
+
+// ─── Main page ───
 export default function TestQualityPage() {
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState("");
@@ -205,11 +222,14 @@ export default function TestQualityPage() {
   const [totalBuildTime, setTotalBuildTime] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Resumable build state
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [pendingJob, setPendingJob] = useState<BuildJob | null>(null);
+  const [checkingResume, setCheckingResume] = useState(true);
+
   // Timer effect
   useEffect(() => {
     if (isBuilding || isAnalyzing) {
-      setElapsedSeconds(0);
-      setTotalBuildTime(null);
       timerRef.current = setInterval(() => {
         setElapsedSeconds(prev => prev + 1);
       }, 1000);
@@ -233,9 +253,81 @@ export default function TestQualityPage() {
     return mins > 0 ? `${mins}:${secs.toString().padStart(2, "0")}` : `${secs} ثانية`;
   };
 
-  // Real build + analyze — uses same pipeline as useBuildEngine (4-phase)
-  const handleTest = async () => {
-    if (!prompt.trim()) {
+  // ─── Check for incomplete builds on mount ───
+  useEffect(() => {
+    const checkPendingBuilds = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) { setCheckingResume(false); return; }
+
+        const { data: jobs } = await supabase
+          .from("build_jobs")
+          .select("*")
+          .eq("user_id", session.user.id)
+          .in("status", ["planning", "building_phase_1", "building_phase_2", "building_phase_3", "building_phase_4"])
+          .order("started_at", { ascending: false })
+          .limit(1);
+
+        if (jobs && jobs.length > 0) {
+          const job = jobs[0] as any as BuildJob;
+          setPendingJob(job);
+          setPrompt(job.prompt);
+          
+          // Restore completed files from DB
+          const restoredFiles: VFSFile[] = [];
+          const restoredPhases: number[] = [];
+          for (let i = 1; i <= 4; i++) {
+            const phaseFiles = (job as any)[`phase_${i}_files`] as VFSFile[] | null;
+            if (phaseFiles && phaseFiles.length > 0) {
+              restoredFiles.push(...phaseFiles);
+              restoredPhases.push(i);
+            }
+          }
+          if (restoredFiles.length > 0) {
+            setBuiltFiles(restoredFiles);
+            setCompletedPhases(restoredPhases);
+          }
+        }
+      } catch (err) {
+        console.error("Error checking pending builds:", err);
+      } finally {
+        setCheckingResume(false);
+      }
+    };
+    checkPendingBuilds();
+  }, []);
+
+  // ─── Save phase result to DB ───
+  const savePhaseToDb = useCallback(async (jobId: string, phaseNum: number, files: VFSFile[]) => {
+    const phaseKey = `phase_${phaseNum}_files`;
+    const nextStatus = phaseNum < 4 ? `building_phase_${phaseNum + 1}` : "analyzing";
+    await supabase
+      .from("build_jobs")
+      .update({
+        [phaseKey]: files as any,
+        current_phase: phaseNum,
+        status: nextStatus,
+      })
+      .eq("id", jobId);
+  }, []);
+
+  // ─── Complete job in DB ───
+  const completeJobInDb = useCallback(async (jobId: string, qualityReport: CodeQualityReport) => {
+    await supabase
+      .from("build_jobs")
+      .update({
+        status: "completed",
+        quality_score: qualityReport.score,
+        quality_report: qualityReport as any,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", jobId);
+  }, []);
+
+  // ─── Resume or start build ───
+  const handleTest = async (resumeFrom?: BuildJob) => {
+    const activePrompt = resumeFrom?.prompt || prompt;
+    if (!activePrompt.trim()) {
       toast.error("الرجاء كتابة طلب البناء");
       return;
     }
@@ -243,10 +335,35 @@ export default function TestQualityPage() {
     setIsBuilding(true);
     setReport(null);
     setShowCode(false);
-    setBuiltFiles([]);
-    setCurrentPhaseNum(0);
-    setCompletedPhases([]);
-    setBuildPhase("📋 برق يخطط المشروع...");
+    setPendingJob(null);
+
+    // Determine start state
+    let jobId = resumeFrom?.id || null;
+    let buildPromptResult = resumeFrom?.build_prompt || "";
+    let dependencyGraph = resumeFrom?.dependency_graph || null;
+    let startPhase = 1;
+    const allCollectedFiles: VFSFile[] = [];
+
+    // If resuming, restore completed phases
+    if (resumeFrom) {
+      for (let i = 1; i <= 4; i++) {
+        const phaseFiles = (resumeFrom as any)[`phase_${i}_files`] as VFSFile[] | null;
+        if (phaseFiles && phaseFiles.length > 0) {
+          allCollectedFiles.push(...phaseFiles);
+          startPhase = i + 1;
+        }
+      }
+      setBuiltFiles([...allCollectedFiles]);
+      setCompletedPhases(Array.from({ length: startPhase - 1 }, (_, i) => i + 1));
+      setElapsedSeconds(Math.floor((Date.now() - new Date(resumeFrom.started_at).getTime()) / 1000));
+      toast.info(`استئناف البناء من المرحلة ${startPhase}/4 ⚡`);
+    } else {
+      setBuiltFiles([]);
+      setCurrentPhaseNum(0);
+      setCompletedPhases([]);
+      setElapsedSeconds(0);
+      setTotalBuildTime(null);
+    }
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -256,44 +373,58 @@ export default function TestQualityPage() {
         return;
       }
 
-      // ─── Phase 1: Planning (same as useBuildEngine.handleSendMessage) ───
-      let buildPromptResult = "";
-      let dependencyGraph: any = null;
-
-      await streamBarqPlanner(
-        { conversationHistory: [{ role: "user", content: prompt }], projectId: null, vfsContext: [] },
-        {
-          onThinkingStep: (step) => setBuildPhase("🧠 " + step),
-          onBuildReady: (bp, _summary, _name, dg) => {
-            buildPromptResult = bp;
-            dependencyGraph = dg;
-          },
-          onMessageDelta: () => {},
-          onDone: () => {},
-          onError: (err) => { throw new Error(err); },
-        }
-      );
-
+      // ─── Planning (skip if resuming with build_prompt) ───
       if (!buildPromptResult) {
-        toast.info("المخطط يحتاج مزيد من التفاصيل — حاول وصفاً أطول");
-        setIsBuilding(false);
-        return;
+        setBuildPhase("📋 برق يخطط المشروع...");
+
+        await streamBarqPlanner(
+          { conversationHistory: [{ role: "user", content: activePrompt }], projectId: null, vfsContext: [] },
+          {
+            onThinkingStep: (step) => setBuildPhase("🧠 " + step),
+            onBuildReady: (bp, _summary, _name, dg) => {
+              buildPromptResult = bp;
+              dependencyGraph = dg;
+            },
+            onMessageDelta: () => {},
+            onDone: () => {},
+            onError: (err) => { throw new Error(err); },
+          }
+        );
+
+        if (!buildPromptResult) {
+          toast.info("المخطط يحتاج مزيد من التفاصيل — حاول وصفاً أطول");
+          setIsBuilding(false);
+          return;
+        }
+
+        // Create job in DB
+        const { data: newJob } = await supabase
+          .from("build_jobs")
+          .insert({
+            user_id: session.user.id,
+            prompt: activePrompt,
+            build_prompt: buildPromptResult,
+            dependency_graph: dependencyGraph,
+            status: "building_phase_1",
+            current_phase: 0,
+          })
+          .select("id")
+          .single();
+
+        if (newJob) jobId = newJob.id;
       }
 
-      console.log("=== PLANNER DONE ===");
-      console.log("Build prompt length:", buildPromptResult.length);
+      setActiveJobId(jobId);
+      console.log("=== PLANNER DONE, Job ID:", jobId, "===");
 
-      // ─── Phase 2: Multi-phase Building (same as useBuildEngine.handleStartBuild) ───
-      const allCollectedFiles: VFSFile[] = [];
-
-      for (let phaseNum = 1; phaseNum <= BUILD_PHASES.length; phaseNum++) {
+      // ─── Multi-phase Building (resume-aware) ───
+      for (let phaseNum = startPhase; phaseNum <= BUILD_PHASES.length; phaseNum++) {
         const phase = BUILD_PHASES[phaseNum - 1];
         setCurrentPhaseNum(phaseNum);
         setBuildPhase(`⚡ المرحلة ${phaseNum}/${BUILD_PHASES.length}: ${phase.label} — ${phase.files.join("، ")}`);
 
         console.log(`=== PHASE ${phaseNum}: ${phase.label} ===`);
 
-        // Same context passing as useBuildEngine — send previous phases' files
         const existingFromPrev = allCollectedFiles.map(f => ({
           path: f.name,
           content: f.content,
@@ -316,7 +447,7 @@ export default function TestQualityPage() {
               setBuildPhase(`⚡ المرحلة ${phaseNum}: 📄 ${path}`);
             },
             onFileDone: (path, content) => {
-              console.log("✅ File generated:", path, "Length:", content?.length || 0, "Lines:", content?.split("\n").length || 0);
+              console.log("✅ File:", path, "Lines:", content?.split("\n").length || 0);
               phaseFiles.push({ name: path.split("/").pop() || path, content });
             },
             onDone: () => {},
@@ -325,7 +456,15 @@ export default function TestQualityPage() {
         );
 
         allCollectedFiles.push(...phaseFiles);
+        setBuiltFiles([...allCollectedFiles]);
         setCompletedPhases(prev => [...prev, phaseNum]);
+
+        // 💾 Save phase progress to DB immediately
+        if (jobId) {
+          await savePhaseToDb(jobId, phaseNum, phaseFiles);
+          console.log(`💾 Phase ${phaseNum} saved to DB`);
+        }
+
         toast.success(`المرحلة ${phaseNum}/${BUILD_PHASES.length} اكتملت: ${phase.label} ⚡`);
       }
 
@@ -336,20 +475,18 @@ export default function TestQualityPage() {
         name: f.name,
         lines: f.content.split("\n").length,
         chars: f.content.length,
-        preview: f.content.substring(0, 100),
       })));
 
       const emptyFiles = allCollectedFiles.filter(f => f.content.split("\n").length <= 5);
       if (emptyFiles.length > 0) {
-        console.warn("⚠️ Empty files detected:", emptyFiles.map(f => f.name));
+        console.warn("⚠️ Empty files:", emptyFiles.map(f => f.name));
         toast.warning(`تحذير: ${emptyFiles.length} ملف فارغ أو قصير جداً`);
       }
 
-      // ─── Phase 3: Analyze ───
+      // ─── Analyze ───
       setIsBuilding(false);
       setIsAnalyzing(true);
       setBuildPhase("🔍 جاري تحليل الجودة...");
-      setBuiltFiles(allCollectedFiles);
 
       setTimeout(() => {
         const result = validateCodeQuality(allCollectedFiles);
@@ -357,16 +494,36 @@ export default function TestQualityPage() {
         setIsAnalyzing(false);
         setBuildPhase("");
         setCurrentPhaseNum(0);
+
+        // Save final result to DB
+        if (jobId) completeJobInDb(jobId, result);
+
         if (result.passed) toast.success(`✅ جودة ممتازة: ${result.score}/100`);
         else toast.warning(`⚠️ الجودة: ${result.score}/100`);
       }, 600);
     } catch (error: any) {
       console.error("[test-quality]", error);
-      toast.error(error?.message || "فشل البناء — حاول مرة أخرى");
+      
+      // Mark job as failed but keep phase data for resume
+      if (jobId) {
+        await supabase.from("build_jobs").update({ status: `building_phase_${currentPhaseNum}` }).eq("id", jobId);
+      }
+      
+      toast.error(error?.message || "فشل البناء — يمكنك استئناف البناء لاحقاً");
       setIsBuilding(false);
       setIsAnalyzing(false);
       setBuildPhase("");
       setCurrentPhaseNum(0);
+    }
+  };
+
+  // Dismiss pending job
+  const dismissPendingJob = async () => {
+    if (pendingJob) {
+      await supabase.from("build_jobs").update({ status: "cancelled" }).eq("id", pendingJob.id);
+      setPendingJob(null);
+      setBuiltFiles([]);
+      setCompletedPhases([]);
     }
   };
 
@@ -389,6 +546,17 @@ export default function TestQualityPage() {
   }, [builtFiles]);
 
   const activeFiles = report ? report.files : [];
+
+  if (checkingResume) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center" dir="rtl">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>جاري التحقق من عمليات البناء السابقة...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background" dir="rtl">
@@ -427,6 +595,42 @@ export default function TestQualityPage() {
             ابنِ موقعاً فعلياً باستخدام محرك برق، ثم حلّل جودة الكود — 5 محاور × 20 نقطة
           </p>
         </div>
+
+        {/* ─── Resume Banner ─── */}
+        {pendingJob && !isBuilding && (
+          <div className="mb-8 p-6 rounded-2xl bg-primary/5 border-2 border-primary/30 animate-fade-in">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                <RotateCcw className="h-6 w-6 text-primary" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-foreground mb-1">يوجد بناء غير مكتمل! 🔄</h3>
+                <p className="text-sm text-muted-foreground mb-1">
+                  "{pendingJob.prompt.slice(0, 80)}..."
+                </p>
+                <p className="text-sm text-muted-foreground mb-4">
+                  المرحلة المكتملة: <span className="font-bold text-primary">{pendingJob.current_phase}/4</span>
+                  {" — "}بدأ {new Date(pendingJob.started_at).toLocaleString("ar-SA")}
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => handleTest(pendingJob)}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-bold hover:opacity-90 transition-all hover:-translate-y-0.5"
+                  >
+                    <Play className="h-4 w-4" />
+                    استأنف البناء
+                  </button>
+                  <button
+                    onClick={dismissPendingJob}
+                    className="inline-flex items-center gap-2 px-6 py-3 border border-border rounded-xl font-bold text-muted-foreground hover:bg-muted transition-all"
+                  >
+                    تجاهل وابدأ من جديد
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ─── Build & Test Section ─── */}
         <section className="bg-card border border-border rounded-3xl p-8 sm:p-10 mb-8 shadow-sm">
@@ -488,6 +692,14 @@ export default function TestQualityPage() {
             </div>
           )}
 
+          {/* Persistence indicator */}
+          {isBuilding && completedPhases.length > 0 && (
+            <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+              تم حفظ {completedPhases.length} مرحلة — يمكنك إغلاق المتصفح والعودة لاحقاً للاستئناف
+            </div>
+          )}
+
           {/* Total build time (after completion) */}
           {totalBuildTime && !isBuilding && !isAnalyzing && (
             <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
@@ -499,7 +711,7 @@ export default function TestQualityPage() {
           {/* Buttons */}
           <div className="flex flex-wrap gap-3">
             <button
-              onClick={handleTest}
+              onClick={() => handleTest()}
               disabled={!prompt.trim() || isBuilding || isAnalyzing}
               className="inline-flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-l from-primary to-primary/80 text-primary-foreground rounded-2xl font-bold text-lg shadow-xl shadow-primary/20 hover:shadow-2xl transition-all duration-500 hover:-translate-y-1 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:scale-100"
             >
@@ -523,7 +735,7 @@ export default function TestQualityPage() {
           </div>
 
           <p className="text-xs text-muted-foreground mt-4">
-            ⚡ "ابنِ واختبر" يستدعي محرك برق الفعلي (يتطلب تسجيل دخول) — "اختبار نموذجي" يستخدم بيانات ثابتة للتجربة السريعة
+            ⚡ "ابنِ واختبر" يستدعي محرك برق الفعلي (يتطلب تسجيل دخول) — البناء قابل للاستئناف إذا أُغلق المتصفح 💾
           </p>
         </section>
 
@@ -661,6 +873,9 @@ export default function TestQualityPage() {
                 <div className="space-y-3 text-sm font-mono text-muted-foreground">
                   {totalBuildTime && (
                     <div>⏱️ مدة البناء: <span className="text-foreground font-bold">{formatTime(totalBuildTime)}</span></div>
+                  )}
+                  {activeJobId && (
+                    <div>🆔 Job ID: <span className="text-foreground font-bold">{activeJobId.slice(0, 8)}...</span></div>
                   )}
                   <div>عدد الملفات: <span className="text-foreground font-bold">{builtFiles.length}</span></div>
                   <div>إجمالي الأحرف: <span className="text-foreground font-bold">{builtFiles.reduce((s, f) => s + f.content.length, 0).toLocaleString()}</span></div>
