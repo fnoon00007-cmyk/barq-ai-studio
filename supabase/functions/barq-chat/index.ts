@@ -332,8 +332,65 @@ async function collectStreamedToolCall(response: Response): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────
-//  CALL AI FOR SINGLE PHASE
+//  PRE-GENERATION VALIDATION
 // ─────────────────────────────────────────────────────────
+const REQUIRED_LINES: Record<string, number> = {
+  'Header.tsx': 250,
+  'Hero.tsx': 300,
+  'Services.tsx': 300,
+  'About.tsx': 250,
+  'Stats.tsx': 200,
+  'Testimonials.tsx': 250,
+  'CTA.tsx': 150,
+  'Contact.tsx': 300,
+  'Footer.tsx': 250,
+  'styles.css': 80,
+  'App.tsx': 50,
+};
+
+function validateGeneratedFiles(result: any): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const ops = result?.vfs_operations;
+  if (!Array.isArray(ops) || ops.length === 0) {
+    return { valid: false, errors: ['لم يتم توليد أي ملفات'] };
+  }
+
+  for (const op of ops) {
+    const content = op.content || '';
+    const lines = content.split('\n').length;
+    const required = REQUIRED_LINES[op.path];
+
+    if (required && lines < required) {
+      errors.push(`${op.path}: ${lines} سطر (المطلوب ${required}+)`);
+    }
+
+    // Arabic content ratio check for .tsx files
+    if (op.path.endsWith('.tsx')) {
+      const arabicChars = (content.match(/[\u0600-\u06FF]/g) || []).length;
+      const totalChars = content.replace(/\s/g, '').length;
+      const arabicRatio = totalChars > 0 ? arabicChars / totalChars : 0;
+      if (arabicRatio < 0.10) {
+        errors.push(`${op.path}: نسبة العربي ${Math.round(arabicRatio * 100)}% (المطلوب 10%+)`);
+      }
+    }
+
+    // Check for forbidden patterns
+    const forbidden = ['// TODO', '// Add content', '// ...', '// rest of code', 'placeholder'];
+    for (const pattern of forbidden) {
+      if (content.includes(pattern)) {
+        errors.push(`${op.path}: يحتوي على نص ممنوع "${pattern}"`);
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+// ─────────────────────────────────────────────────────────
+//  CALL AI FOR SINGLE PHASE (with validation + retry)
+// ─────────────────────────────────────────────────────────
+const MAX_VALIDATION_RETRIES = 1;
+
 async function callAIForPhase(
   messages: Array<{role: string; content: string}>,
   toolsDef: any[],
@@ -342,58 +399,116 @@ async function callAIForPhase(
   lovableKey: string | undefined
 ): Promise<any | null> {
 
-  const geminiBody = JSON.stringify({
-    model: "gemini-2.5-flash",
-    messages,
-    stream: true,
-    max_tokens: 16384,
-    tools: toolsDef,
-    tool_choice: { type: "function", function: { name: "generate_website" } },
-  });
-
-  const groqBody = JSON.stringify({
-    model: "llama-3.3-70b-versatile",
-    messages,
-    stream: true,
-    max_tokens: 16384,
-    tools: toolsDef,
-    tool_choice: { type: "function", function: { name: "generate_website" } },
-  });
-
-  let response: Response | null = null;
-
-  // 1. Gemini
-  response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini builder");
-
-  // 2. Groq fallback
-  if (!response) {
-    response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq builder");
-  }
-
-  // 3. Lovable fallback
-  if (!response && lovableKey) {
-    const lovableBody = JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      messages,
+  async function doCall(msgs: Array<{role: string; content: string}>): Promise<any | null> {
+    const geminiBody = JSON.stringify({
+      model: "gemini-2.5-flash",
+      messages: msgs,
       stream: true,
       max_tokens: 16384,
       tools: toolsDef,
       tool_choice: { type: "function", function: { name: "generate_website" } },
     });
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" },
-      body: lovableBody,
+
+    const groqBody = JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: msgs,
+      stream: true,
+      max_tokens: 16384,
+      tools: toolsDef,
+      tool_choice: { type: "function", function: { name: "generate_website" } },
     });
-    if (res.ok) response = res;
+
+    let response: Response | null = null;
+
+    // 1. Gemini
+    response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini builder");
+
+    // 2. Groq fallback
+    if (!response) {
+      response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq builder");
+    }
+
+    // 3. Lovable fallback
+    if (!response && lovableKey) {
+      const lovableBody = JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: msgs,
+        stream: true,
+        max_tokens: 16384,
+        tools: toolsDef,
+        tool_choice: { type: "function", function: { name: "generate_website" } },
+      });
+      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" },
+        body: lovableBody,
+      });
+      if (res.ok) response = res;
+    }
+
+    if (!response) return null;
+
+    const toolCallArgs = await collectStreamedToolCall(response);
+    if (!toolCallArgs) return null;
+
+    try { return JSON.parse(toolCallArgs); } catch { return null; }
   }
 
-  if (!response) return null;
+  // First attempt
+  let result = await doCall(messages);
+  if (!result) return null;
 
-  const toolCallArgs = await collectStreamedToolCall(response);
-  if (!toolCallArgs) return null;
+  // Validate
+  const validation = validateGeneratedFiles(result);
+  if (validation.valid) {
+    console.log('✅ Pre-generation validation PASSED');
+    return result;
+  }
 
-  try { return JSON.parse(toolCallArgs); } catch { return null; }
+  console.warn('❌ Pre-generation validation FAILED:', validation.errors);
+
+  // Retry with correction prompt
+  for (let retry = 0; retry < MAX_VALIDATION_RETRIES; retry++) {
+    console.log(`🔄 Validation retry ${retry + 1}/${MAX_VALIDATION_RETRIES}...`);
+
+    const retryPrompt = [
+      '❌ VALIDATION FAILED — YOUR PREVIOUS OUTPUT WAS REJECTED.',
+      '',
+      'Issues found:',
+      ...validation.errors.map(e => '- ' + e),
+      '',
+      'YOU MUST REGENERATE with these MANDATORY requirements:',
+      '- Each component MUST be 200-500 lines MINIMUM (NOT 50, NOT 100)',
+      '- ALL visible text MUST be in Arabic (15%+ Arabic characters)',
+      '- NO placeholders, NO TODOs, NO "// Add content here"',
+      '- COMPLETE, PRODUCTION-READY, RICH code with decorative elements',
+      '- Add 3-5 decorative background shapes per component',
+      '- Add hover effects, animations, responsive classes',
+      '',
+      'REGENERATE NOW with CORRECT sizes. THIS IS YOUR LAST CHANCE.',
+    ].join('\n');
+
+    const retryMessages = [
+      ...messages,
+      { role: 'assistant', content: 'I will regenerate with the correct requirements.' },
+      { role: 'user', content: retryPrompt },
+    ];
+
+    result = await doCall(retryMessages);
+    if (!result) return null;
+
+    const retryValidation = validateGeneratedFiles(result);
+    if (retryValidation.valid) {
+      console.log('✅ Validation PASSED on retry ' + (retry + 1));
+      return result;
+    }
+
+    console.warn('❌ Validation still failed on retry ' + (retry + 1) + ':', retryValidation.errors);
+  }
+
+  // Return last result even if validation failed (better than nothing)
+  console.warn('⚠️ Returning result despite validation failures after retries');
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────
