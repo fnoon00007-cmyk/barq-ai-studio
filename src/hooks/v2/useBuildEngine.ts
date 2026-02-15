@@ -86,6 +86,8 @@ export function useBuildEngine({
 }: UseBuildEngineProps) {
   const [state, dispatch] = useReducer(buildEngineReducer, initialState);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const fixAttemptsRef = useRef<number>(0);
+  const MAX_FIX_ATTEMPTS = 2;
 
   const handleAbort = useCallback(() => {
     if (abortControllerRef.current) {
@@ -298,7 +300,7 @@ export function useBuildEngine({
             await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
             await saveProject();
 
-            // --- Auto Review Phase ---
+            // --- Auto Review Phase (with attempt limit) ---
             if (finalOps.length > 0 && buildPromptContent) {
               dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
               try {
@@ -311,6 +313,7 @@ export function useBuildEngine({
                 const reviewResult = await reviewBuild(buildPromptContent, reviewFiles);
 
                 if (reviewResult.status === "approved") {
+                  fixAttemptsRef.current = 0; // Reset on success
                   dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
                   const reviewMsgId = crypto.randomUUID();
                   addMessage({
@@ -321,23 +324,40 @@ export function useBuildEngine({
                     pipelineStage: "done",
                   });
                   await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
-                  // Clear approved badge after 4s
                   setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
                 } else if (reviewResult.status === "needs_fix" && reviewResult.fix_prompt) {
-                  dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
-                  const issuesSummary = reviewResult.issues
-                    .map(i => `• ${i.file}: ${i.issue}`)
-                    .join("\n");
-                  const reviewMsgId = crypto.randomUUID();
-                  addMessage({
-                    id: reviewMsgId,
-                    role: "assistant",
-                    content: `🔧 المراجعة وجدت مشاكل:\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`,
-                    timestamp: new Date(),
-                  });
-                  await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
-                  // Auto-fix: re-send the fix prompt through the planner
-                  handleSendMessage(reviewResult.fix_prompt, true);
+                  if (fixAttemptsRef.current >= MAX_FIX_ATTEMPTS) {
+                    // Stop the loop — max attempts reached
+                    fixAttemptsRef.current = 0;
+                    dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+                    const issuesSummary = reviewResult.issues
+                      .map(i => `• ${i.file}: ${i.issue}`)
+                      .join("\n");
+                    const reviewMsgId = crypto.randomUUID();
+                    addMessage({
+                      id: reviewMsgId,
+                      role: "assistant",
+                      content: `⚠️ المراجعة وجدت مشاكل لم يتم حلها بعد ${MAX_FIX_ATTEMPTS} محاولات:\n${issuesSummary}\n\nيمكنك محاولة إصلاحها يدوياً أو إرسال طلب تعديل جديد.`,
+                      timestamp: new Date(),
+                      pipelineStage: "done",
+                    });
+                    await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+                  } else {
+                    fixAttemptsRef.current += 1;
+                    dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
+                    const issuesSummary = reviewResult.issues
+                      .map(i => `• ${i.file}: ${i.issue}`)
+                      .join("\n");
+                    const reviewMsgId = crypto.randomUUID();
+                    addMessage({
+                      id: reviewMsgId,
+                      role: "assistant",
+                      content: `🔧 المراجعة وجدت مشاكل (محاولة ${fixAttemptsRef.current}/${MAX_FIX_ATTEMPTS}):\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`,
+                      timestamp: new Date(),
+                    });
+                    await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+                    handleSendMessage(reviewResult.fix_prompt, true);
+                  }
                 } else {
                   dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
                 }
