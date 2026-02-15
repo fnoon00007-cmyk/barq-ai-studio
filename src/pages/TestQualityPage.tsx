@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowRight, FlaskConical, FileCode2, BarChart3, Code2,
   ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, XCircle,
-  Sparkles, Lightbulb, Loader2, Bug, Timer, RotateCcw, Play, Wifi
+  Sparkles, Lightbulb, Loader2, Bug, Timer, RotateCcw, Play, Wifi,
+  Trash2, Eye, GitCompare, X, ArrowLeftRight
 } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { validateCodeQuality, type CodeQualityReport, type VFSFile } from "@/lib/code-validator";
@@ -11,6 +12,21 @@ import { streamBarqPlanner, BUILD_PHASES } from "@/lib/barq-api";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
+
+// ─── Types ───
+interface SavedTestResult {
+  id: string;
+  prompt: string;
+  score: number;
+  passed: boolean;
+  fileCount: number;
+  totalLines: number;
+  buildTime: number | null;
+  timestamp: Date;
+  report: CodeQualityReport;
+  status: "passed" | "failed" | "error";
+  jobId?: string;
+}
 
 // ─── Quick examples ───
 const QUICK_EXAMPLES = [
@@ -161,6 +177,193 @@ function PhaseProgressBar({ currentPhase, completedPhases }: { currentPhase: num
   );
 }
 
+// ─── Comparison Component ───
+function ComparisonView({ resultA, resultB, onClose }: { resultA: SavedTestResult; resultB: SavedTestResult; onClose: () => void }) {
+  const axes = [
+    { key: "codeSize", label: "حجم الكود", icon: "📏" },
+    { key: "tailwindRichness", label: "ثراء Tailwind", icon: "🎨" },
+    { key: "arabicContent", label: "محتوى عربي", icon: "🇸🇦" },
+    { key: "interactivity", label: "التفاعلية", icon: "✨" },
+    { key: "completeness", label: "الاكتمال", icon: "📁" },
+  ] as const;
+
+  return (
+    <section className="bg-card border-2 border-primary/30 rounded-3xl p-6 sm:p-8 shadow-lg animate-fade-in">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-bold text-foreground flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+            <ArrowLeftRight className="h-5 w-5 text-primary" />
+          </div>
+          مقارنة النتائج
+        </h2>
+        <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
+          <X className="h-5 w-5 text-muted-foreground" />
+        </button>
+      </div>
+
+      {/* Headers */}
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="text-center p-4 rounded-2xl bg-muted/50 border border-border">
+          <p className="text-xs text-muted-foreground mb-2 truncate">{resultA.prompt || "اختبار نموذجي"}</p>
+          <ScoreCircle score={resultA.score} size={80} />
+          <div className={`mt-2 text-xs font-bold ${resultA.passed ? "text-primary" : "text-destructive"}`}>
+            {resultA.passed ? "✅ ناجح" : "❌ فاشل"}
+          </div>
+        </div>
+        <div className="flex items-center justify-center">
+          <div className="text-2xl font-black text-muted-foreground">VS</div>
+        </div>
+        <div className="text-center p-4 rounded-2xl bg-muted/50 border border-border">
+          <p className="text-xs text-muted-foreground mb-2 truncate">{resultB.prompt || "اختبار نموذجي"}</p>
+          <ScoreCircle score={resultB.score} size={80} />
+          <div className={`mt-2 text-xs font-bold ${resultB.passed ? "text-primary" : "text-destructive"}`}>
+            {resultB.passed ? "✅ ناجح" : "❌ فاشل"}
+          </div>
+        </div>
+      </div>
+
+      {/* Axis comparison */}
+      <div className="space-y-4">
+        {axes.map(({ key, label, icon }) => {
+          const a = resultA.report.breakdown[key];
+          const b = resultB.report.breakdown[key];
+          const diff = a - b;
+          return (
+            <div key={key} className="grid grid-cols-[1fr_auto_1fr] gap-3 items-center">
+              <div className="flex items-center justify-between bg-muted/30 rounded-xl px-3 py-2">
+                <span className="text-sm font-bold text-foreground">{a}/20</span>
+                <div className="h-2 flex-1 mx-3 bg-border rounded-full overflow-hidden">
+                  <div className="h-full bg-primary rounded-full" style={{ width: `${(a / 20) * 100}%` }} />
+                </div>
+              </div>
+              <div className="text-center min-w-[100px]">
+                <span className="text-xs text-muted-foreground">{icon} {label}</span>
+                {diff !== 0 && (
+                  <div className={`text-xs font-bold mt-0.5 ${diff > 0 ? "text-primary" : "text-destructive"}`}>
+                    {diff > 0 ? `+${diff} ←` : `${diff} →`}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center justify-between bg-muted/30 rounded-xl px-3 py-2">
+                <div className="h-2 flex-1 mx-3 bg-border rounded-full overflow-hidden">
+                  <div className="h-full bg-accent rounded-full" style={{ width: `${(b / 20) * 100}%` }} />
+                </div>
+                <span className="text-sm font-bold text-foreground">{b}/20</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-2 gap-4 mt-6">
+        <div className="text-center p-3 rounded-xl bg-muted/30 border border-border">
+          <div className="text-xs text-muted-foreground mb-1">عدد الملفات</div>
+          <div className="font-bold text-foreground">{resultA.fileCount} vs {resultB.fileCount}</div>
+        </div>
+        <div className="text-center p-3 rounded-xl bg-muted/30 border border-border">
+          <div className="text-xs text-muted-foreground mb-1">إجمالي الأسطر</div>
+          <div className="font-bold text-foreground">{resultA.totalLines.toLocaleString()} vs {resultB.totalLines.toLocaleString()}</div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Detail Modal ───
+function DetailView({ result, onClose }: { result: SavedTestResult; onClose: () => void }) {
+  const report = result.report;
+  return (
+    <div className="fixed inset-0 z-[100] bg-background/80 backdrop-blur-sm flex items-start justify-center pt-8 pb-8 overflow-y-auto" onClick={onClose}>
+      <div className="bg-card border border-border rounded-3xl p-6 sm:p-8 shadow-2xl max-w-2xl w-full mx-4 animate-fade-in" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-foreground">تفاصيل الاختبار</h2>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted transition-colors">
+            <X className="h-5 w-5 text-muted-foreground" />
+          </button>
+        </div>
+
+        {/* Score + status */}
+        <div className="flex items-center gap-6 mb-6">
+          <ScoreCircle score={report.score} size={100} />
+          <div className="flex-1">
+            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold mb-2 ${
+              result.status === "passed" ? "bg-primary/10 text-primary" 
+              : result.status === "error" ? "bg-destructive/10 text-destructive" 
+              : "bg-destructive/10 text-destructive"
+            }`}>
+              {result.status === "passed" ? "✅ ناجح" : result.status === "error" ? "⚠️ خطأ بناء" : "❌ فاشل"}
+            </div>
+            <p className="text-sm text-muted-foreground">{result.prompt || "اختبار نموذجي"}</p>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground mt-2">
+              <span>{result.fileCount} ملف</span>
+              <span>{result.totalLines.toLocaleString()} سطر</span>
+              {result.buildTime && <span>⏱️ {Math.floor(result.buildTime / 60)}:{(result.buildTime % 60).toString().padStart(2, "0")}</span>}
+              <span>{new Date(result.timestamp).toLocaleString("ar-SA")}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Breakdown */}
+        <div className="space-y-4 mb-6">
+          <BreakdownBar icon="📏" label="حجم الكود" score={report.breakdown.codeSize} />
+          <BreakdownBar icon="🎨" label="ثراء Tailwind" score={report.breakdown.tailwindRichness} />
+          <BreakdownBar icon="🇸🇦" label="محتوى عربي" score={report.breakdown.arabicContent} />
+          <BreakdownBar icon="✨" label="التفاعلية" score={report.breakdown.interactivity} />
+          <BreakdownBar icon="📁" label="الاكتمال" score={report.breakdown.completeness} />
+        </div>
+
+        {/* Files */}
+        {report.files.length > 0 && (
+          <div className="overflow-x-auto mb-4">
+            <table className="w-full text-sm">
+              <thead><tr className="border-b border-border">
+                <th className="text-right py-2 px-3 font-semibold text-muted-foreground text-xs">الملف</th>
+                <th className="text-center py-2 px-2 font-semibold text-muted-foreground text-xs">سطر</th>
+                <th className="text-center py-2 px-2 font-semibold text-muted-foreground text-xs">عربي</th>
+                <th className="text-center py-2 px-2 font-semibold text-muted-foreground text-xs">تقييم</th>
+              </tr></thead>
+              <tbody>
+                {report.files.map((file) => (
+                  <tr key={file.name} className="border-b border-border/50">
+                    <td className="py-2 px-3 font-mono text-foreground text-xs">{file.name}</td>
+                    <td className="text-center py-2 px-2 text-xs">{file.lines}</td>
+                    <td className="text-center py-2 px-2 text-xs">{Math.round(file.arabicRatio * 100)}%</td>
+                    <td className="text-center py-2 px-2"><GradeBadge grade={file.grade} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Issues */}
+        {report.issues.length > 0 && (
+          <div className="p-3 rounded-xl bg-destructive/5 border border-destructive/20 mb-4">
+            <h4 className="text-xs font-bold text-destructive mb-1.5">مشاكل</h4>
+            <ul className="space-y-1">
+              {report.issues.map((issue, i) => (
+                <li key={i} className="text-xs text-destructive/80">{issue}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Suggestions */}
+        {report.suggestions.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {report.suggestions.map((s, i) => (
+              <span key={i} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-muted text-muted-foreground text-xs">
+                <Lightbulb className="h-3 w-3" />{s}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Helper: extract files from job ───
 function extractFilesFromJob(job: any): VFSFile[] {
   const files: VFSFile[] = [];
@@ -210,17 +413,6 @@ export default function TestQualityPage() {
   const [checkingResume, setCheckingResume] = useState(true);
 
   // Saved test results history
-  interface SavedTestResult {
-    id: string;
-    prompt: string;
-    score: number;
-    passed: boolean;
-    fileCount: number;
-    totalLines: number;
-    buildTime: number | null;
-    timestamp: Date;
-    report: CodeQualityReport;
-  }
   const [savedResults, setSavedResults] = useState<SavedTestResult[]>(() => {
     try {
       const stored = localStorage.getItem("barq_test_results");
@@ -228,15 +420,22 @@ export default function TestQualityPage() {
     } catch { return []; }
   });
 
+  // Comparison & detail view state
+  const [compareSelection, setCompareSelection] = useState<string[]>([]);
+  const [showComparison, setShowComparison] = useState(false);
+  const [detailResult, setDetailResult] = useState<SavedTestResult | null>(null);
+  const [resultsFilter, setResultsFilter] = useState<"all" | "passed" | "failed">("all");
+
   // Persist results to localStorage
   useEffect(() => {
     localStorage.setItem("barq_test_results", JSON.stringify(savedResults));
   }, [savedResults]);
 
-  const saveTestResult = useCallback((testReport: CodeQualityReport, buildTimeSeconds: number | null) => {
+  const saveTestResult = useCallback((testReport: CodeQualityReport, buildTimeSeconds: number | null, jobId?: string, promptText?: string) => {
+    const resultPrompt = promptText || prompt;
     const newResult: SavedTestResult = {
       id: crypto.randomUUID(),
-      prompt: prompt.slice(0, 120),
+      prompt: resultPrompt.slice(0, 120),
       score: testReport.score,
       passed: testReport.passed,
       fileCount: testReport.files.length,
@@ -244,13 +443,42 @@ export default function TestQualityPage() {
       buildTime: buildTimeSeconds,
       timestamp: new Date(),
       report: testReport,
+      status: testReport.passed ? "passed" : "failed",
+      jobId,
     };
     setSavedResults(prev => [newResult, ...prev]);
+    return newResult;
   }, [prompt]);
+
+  const saveFailedResult = useCallback((promptText: string, phaseNum: number, jobId?: string) => {
+    const failedResult: SavedTestResult = {
+      id: crypto.randomUUID(),
+      prompt: promptText.slice(0, 120),
+      score: 0,
+      passed: false,
+      fileCount: 0,
+      totalLines: 0,
+      buildTime: null,
+      timestamp: new Date(),
+      report: { score: 0, passed: false, breakdown: { codeSize: 0, tailwindRichness: 0, arabicContent: 0, interactivity: 0, completeness: 0 }, files: [], issues: [`فشل البناء في المرحلة ${phaseNum}`], suggestions: [] },
+      status: "error",
+      jobId,
+    };
+    setSavedResults(prev => [failedResult, ...prev]);
+  }, []);
 
   const deleteTestResult = useCallback((id: string) => {
     setSavedResults(prev => prev.filter(r => r.id !== id));
+    setCompareSelection(prev => prev.filter(s => s !== id));
     toast.success("تم حذف النتيجة");
+  }, []);
+
+  const toggleCompareSelect = useCallback((id: string) => {
+    setCompareSelection(prev => {
+      if (prev.includes(id)) return prev.filter(s => s !== id);
+      if (prev.length >= 2) { toast.info("اختر نتيجتين فقط للمقارنة"); return prev; }
+      return [...prev, id];
+    });
   }, []);
 
   // Timer effect
@@ -314,10 +542,8 @@ export default function TestQualityPage() {
             const buildTime = buildStartRef.current > 0 ? Math.floor((Date.now() - buildStartRef.current) / 1000) : null;
             toast.success(`✅ البناء اكتمل: ${result.score}/100`);
 
-            // Save to history
-            saveTestResult(result, buildTime);
+            saveTestResult(result, buildTime, jobId, job.prompt);
 
-            // Save quality report to DB
             supabase.from("build_jobs").update({
               quality_score: result.score,
               quality_report: result as any,
@@ -331,16 +557,18 @@ export default function TestQualityPage() {
         if (job.status.startsWith("failed")) {
           setIsBuilding(false);
           setBuildPhase("");
-          toast.error("فشل البناء في المرحلة " + job.current_phase);
+          const failPhase = job.current_phase || 0;
+          toast.error("فشل البناء في المرحلة " + failPhase);
+          saveFailedResult(job.prompt || prompt, failPhase, jobId);
           supabase.removeChannel(channel);
         }
       })
       .subscribe();
 
     return channel;
-  }, [saveTestResult]);
+  }, [saveTestResult, saveFailedResult, prompt]);
 
-  // ─── Stale build detection: if no update for 5 minutes, mark as failed ───
+  // ─── Stale build detection ───
   useEffect(() => {
     if (!isBuilding || !activeJobId) return;
 
@@ -348,13 +576,12 @@ export default function TestQualityPage() {
       try {
         const { data: job } = await supabase
           .from("build_jobs")
-          .select("status, updated_at")
+          .select("status, updated_at, prompt, current_phase")
           .eq("id", activeJobId)
           .single();
 
         if (!job) return;
 
-        // If completed/failed, sync state
         if (job.status === "completed" || job.status.startsWith("failed")) {
           setIsBuilding(false);
           setBuildPhase("");
@@ -365,7 +592,6 @@ export default function TestQualityPage() {
           return;
         }
 
-        // Check staleness: >5 min since last update
         const lastUpdate = new Date(job.updated_at).getTime();
         const staleMs = Date.now() - lastUpdate;
         if (staleMs > 5 * 60 * 1000) {
@@ -373,25 +599,27 @@ export default function TestQualityPage() {
           await supabase.from("build_jobs").update({ status: `failed_phase_${currentPhaseNum || 4}` }).eq("id", activeJobId);
           setIsBuilding(false);
           setBuildPhase("");
+          saveFailedResult(job.prompt || prompt, currentPhaseNum || 4, activeJobId);
           toast.error("⏰ البناء تجاوز المدة المسموحة — حاول مرة ثانية");
           clearInterval(staleCheckInterval);
         }
       } catch (err) {
         console.warn("[stale-check] Error:", err);
       }
-    }, 30_000); // Check every 30 seconds
+    }, 30_000);
 
     return () => clearInterval(staleCheckInterval);
-  }, [isBuilding, activeJobId, currentPhaseNum]);
+  }, [isBuilding, activeJobId, currentPhaseNum, saveFailedResult, prompt]);
 
-  // ─── Check for active/incomplete builds on mount ───
+  // ─── Check for active/incomplete/completed builds on mount ───
   useEffect(() => {
     const check = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) { setCheckingResume(false); return; }
 
-        const { data: jobs } = await supabase
+        // Check active builds
+        const { data: activeJobs } = await supabase
           .from("build_jobs")
           .select("*")
           .eq("user_id", session.user.id)
@@ -399,12 +627,11 @@ export default function TestQualityPage() {
           .order("started_at", { ascending: false })
           .limit(1);
 
-        if (jobs && jobs.length > 0) {
-          const job = jobs[0];
+        if (activeJobs && activeJobs.length > 0) {
+          const job = activeJobs[0];
           setPendingJob(job);
           setPrompt(job.prompt);
 
-          // If it's actively building, subscribe immediately
           if (job.status.startsWith("building_phase_")) {
             setIsBuilding(true);
             setActiveJobId(job.id);
@@ -420,8 +647,60 @@ export default function TestQualityPage() {
             setBuildPhase(`⚡ المرحلة ${curPhase}/4: ${BUILD_PHASES[curPhase - 1]?.label || ""}`);
 
             subscribeToJob(job.id);
-            setPendingJob(null); // Don't show banner, auto-connected
+            setPendingJob(null);
             toast.info("🔄 متصل ببناء جاري — السيرفر يعمل في الخلفية");
+          }
+          setCheckingResume(false);
+          return;
+        }
+
+        // ─── Auto-analyze completed builds that finished while user was away ───
+        const existingJobIds = savedResults.map(r => r.jobId).filter(Boolean);
+        const { data: completedJobs } = await supabase
+          .from("build_jobs")
+          .select("*")
+          .eq("user_id", session.user.id)
+          .eq("status", "completed")
+          .is("quality_score", null)
+          .order("completed_at", { ascending: false })
+          .limit(5);
+
+        if (completedJobs && completedJobs.length > 0) {
+          for (const job of completedJobs) {
+            if (existingJobIds.includes(job.id)) continue;
+            const files = extractFilesFromJob(job);
+            if (files.length > 0) {
+              const result = validateCodeQuality(files);
+              const buildTime = job.completed_at && job.started_at
+                ? Math.floor((new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000)
+                : null;
+              saveTestResult(result, buildTime, job.id, job.prompt);
+              await supabase.from("build_jobs").update({
+                quality_score: result.score,
+                quality_report: result as any,
+              }).eq("id", job.id);
+              toast.success(`📊 تم تحليل بناء مكتمل: ${result.score}/100`);
+            }
+          }
+        }
+
+        // Also check recently failed builds
+        const { data: failedJobs } = await supabase
+          .from("build_jobs")
+          .select("id, prompt, current_phase, started_at, status")
+          .eq("user_id", session.user.id)
+          .like("status", "failed_%")
+          .order("updated_at", { ascending: false })
+          .limit(5);
+
+        if (failedJobs && failedJobs.length > 0) {
+          for (const job of failedJobs) {
+            if (existingJobIds.includes(job.id)) continue;
+            // Only auto-add recent failures (last 24h)
+            const startedAt = new Date(job.started_at).getTime();
+            if (Date.now() - startedAt < 24 * 60 * 60 * 1000) {
+              saveFailedResult(job.prompt, job.current_phase || 0, job.id);
+            }
           }
         }
       } catch (err) {
@@ -432,7 +711,6 @@ export default function TestQualityPage() {
     };
     check();
 
-    // Auto-sync when returning to tab
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible" && !isBuilding) {
         check();
@@ -466,7 +744,6 @@ export default function TestQualityPage() {
         return;
       }
 
-      // ─── Step 1: Planning ───
       let buildPromptResult = "";
       let dependencyGraph: any = null;
 
@@ -487,7 +764,6 @@ export default function TestQualityPage() {
         return;
       }
 
-      // ─── Step 2: Create job in DB ───
       const { data: newJob, error: jobErr } = await supabase
         .from("build_jobs")
         .insert({
@@ -508,10 +784,8 @@ export default function TestQualityPage() {
       setBuildPhase("⚡ المرحلة 1/4: الأساس");
       setCurrentPhaseNum(1);
 
-      // ─── Step 3: Subscribe to realtime updates ───
       subscribeToJob(jobId);
 
-      // ─── Step 4: Trigger server-side worker (fire-and-forget) ───
       const workerUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-build-worker`;
       const resp = await fetch(workerUrl, {
         method: "POST",
@@ -538,7 +812,6 @@ export default function TestQualityPage() {
     }
   };
 
-  // Dismiss pending job
   const dismissPendingJob = async () => {
     if (pendingJob) {
       await supabase.from("build_jobs").update({ status: "cancelled" }).eq("id", pendingJob.id);
@@ -548,7 +821,6 @@ export default function TestQualityPage() {
     }
   };
 
-  // Demo test
   const handleDemoTest = () => {
     setIsAnalyzing(true);
     setReport(null);
@@ -569,6 +841,21 @@ export default function TestQualityPage() {
   }, [builtFiles]);
 
   const activeFiles = report ? report.files : [];
+
+  // Filtered results
+  const filteredResults = useMemo(() => {
+    if (resultsFilter === "all") return savedResults;
+    if (resultsFilter === "passed") return savedResults.filter(r => r.status === "passed");
+    return savedResults.filter(r => r.status === "failed" || r.status === "error");
+  }, [savedResults, resultsFilter]);
+
+  // Comparison pair
+  const comparisonPair = useMemo(() => {
+    if (compareSelection.length !== 2) return null;
+    const a = savedResults.find(r => r.id === compareSelection[0]);
+    const b = savedResults.find(r => r.id === compareSelection[1]);
+    return a && b ? [a, b] as const : null;
+  }, [compareSelection, savedResults]);
 
   if (checkingResume) {
     return (
@@ -619,7 +906,7 @@ export default function TestQualityPage() {
           </p>
         </div>
 
-        {/* ─── Resume Banner (only for stopped builds, not active ones) ─── */}
+        {/* Resume Banner */}
         {pendingJob && !isBuilding && (
           <div className="mb-8 p-6 rounded-2xl bg-primary/5 border-2 border-primary/30 animate-fade-in">
             <div className="flex items-start gap-4">
@@ -636,7 +923,6 @@ export default function TestQualityPage() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
-                      // Re-subscribe to watch for updates
                       setIsBuilding(true);
                       setActiveJobId(pendingJob.id);
                       buildStartRef.current = new Date(pendingJob.started_at).getTime();
@@ -666,7 +952,7 @@ export default function TestQualityPage() {
           </div>
         )}
 
-        {/* ─── Build & Test Section ─── */}
+        {/* Build & Test Section */}
         <section className="bg-card border border-border rounded-3xl p-8 sm:p-10 mb-8 shadow-sm">
           <h2 className="text-xl font-bold text-foreground mb-6 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -675,7 +961,6 @@ export default function TestQualityPage() {
             ابنِ واختبر الجودة
           </h2>
 
-          {/* Quick Examples */}
           <div className="mb-4">
             <label className="text-sm font-medium text-muted-foreground mb-2.5 block">أمثلة سريعة:</label>
             <div className="flex flex-wrap gap-2">
@@ -688,7 +973,6 @@ export default function TestQualityPage() {
             </div>
           </div>
 
-          {/* Textarea */}
           <div className="mb-3">
             <label className="text-sm font-medium text-muted-foreground mb-2 block">طلب البناء:</label>
             <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)}
@@ -696,12 +980,10 @@ export default function TestQualityPage() {
             <div className="text-xs text-muted-foreground mt-1.5 text-left">{prompt.length} حرف</div>
           </div>
 
-          {/* Phase progress */}
           {isBuilding && currentPhaseNum > 0 && (
             <PhaseProgressBar currentPhase={currentPhaseNum} completedPhases={completedPhases} />
           )}
 
-          {/* Timer + status */}
           {(isBuilding || isAnalyzing) && (
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm text-primary font-medium animate-pulse">
@@ -715,7 +997,6 @@ export default function TestQualityPage() {
             </div>
           )}
 
-          {/* Server-side indicator */}
           {isBuilding && (
             <div className="mb-4 flex items-center gap-2 text-xs text-primary bg-primary/5 px-4 py-2.5 rounded-xl border border-primary/20">
               <Wifi className="h-3.5 w-3.5" />
@@ -723,7 +1004,6 @@ export default function TestQualityPage() {
             </div>
           )}
 
-          {/* Total build time */}
           {totalBuildTime && !isBuilding && !isAnalyzing && (
             <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
               <Timer className="h-4 w-4" />
@@ -731,7 +1011,6 @@ export default function TestQualityPage() {
             </div>
           )}
 
-          {/* Buttons */}
           <div className="flex flex-wrap gap-3">
             <button onClick={handleTest} disabled={!prompt.trim() || isBuilding || isAnalyzing}
               className="inline-flex items-center justify-center gap-3 px-8 py-4 bg-gradient-to-l from-primary to-primary/80 text-primary-foreground rounded-2xl font-bold text-lg shadow-xl shadow-primary/20 hover:shadow-2xl transition-all duration-500 hover:-translate-y-1 active:scale-[0.98] disabled:opacity-50 disabled:hover:translate-y-0">
@@ -747,7 +1026,7 @@ export default function TestQualityPage() {
           <p className="text-xs text-muted-foreground mt-4">⚡ البناء يتم على السيرفر — لا يحتاج المتصفح مفتوح</p>
         </section>
 
-        {/* ─── Results ─── */}
+        {/* Results */}
         {report && (
           <div className="space-y-8 animate-fade-in">
             <section className="bg-card border border-border rounded-3xl p-8 sm:p-10 shadow-sm">
@@ -888,10 +1167,21 @@ export default function TestQualityPage() {
           </div>
         )}
 
-        {/* ─── Saved Test Results History ─── */}
+        {/* ─── Comparison View ─── */}
+        {showComparison && comparisonPair && (
+          <div className="mt-8">
+            <ComparisonView
+              resultA={comparisonPair[0]}
+              resultB={comparisonPair[1]}
+              onClose={() => { setShowComparison(false); setCompareSelection([]); }}
+            />
+          </div>
+        )}
+
+        {/* ─── Test Results History ─── */}
         {savedResults.length > 0 && (
           <section className="bg-card border border-border rounded-3xl p-8 sm:p-10 shadow-sm mt-8">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-foreground flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
                   <BarChart3 className="h-5 w-5 text-primary" />
@@ -899,41 +1189,127 @@ export default function TestQualityPage() {
                 سجل الاختبارات ({savedResults.length})
               </h2>
               <button
-                onClick={() => { setSavedResults([]); toast.success("تم مسح جميع النتائج"); }}
+                onClick={() => { setSavedResults([]); setCompareSelection([]); toast.success("تم مسح جميع النتائج"); }}
                 className="text-xs text-destructive hover:text-destructive/80 font-medium transition-colors"
               >
                 مسح الكل
               </button>
             </div>
+
+            {/* Filter tabs */}
+            <div className="flex items-center gap-2 mb-4">
+              {(["all", "passed", "failed"] as const).map((filter) => {
+                const counts = {
+                  all: savedResults.length,
+                  passed: savedResults.filter(r => r.status === "passed").length,
+                  failed: savedResults.filter(r => r.status === "failed" || r.status === "error").length,
+                };
+                const labels = { all: "الكل", passed: "✅ ناجح", failed: "❌ فاشل" };
+                return (
+                  <button
+                    key={filter}
+                    onClick={() => setResultsFilter(filter)}
+                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                      resultsFilter === filter
+                        ? "bg-primary/10 border-primary/30 text-primary font-bold"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {labels[filter]} ({counts[filter]})
+                  </button>
+                );
+              })}
+
+              {/* Compare button */}
+              {compareSelection.length === 2 && (
+                <button
+                  onClick={() => setShowComparison(true)}
+                  className="text-xs px-4 py-1.5 rounded-lg bg-primary text-primary-foreground font-bold hover:opacity-90 transition-opacity mr-auto flex items-center gap-1.5"
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                  قارن ({compareSelection.length})
+                </button>
+              )}
+              {compareSelection.length > 0 && compareSelection.length < 2 && (
+                <span className="text-xs text-muted-foreground mr-auto">اختر نتيجة ثانية للمقارنة...</span>
+              )}
+            </div>
+
+            {/* Results list */}
             <div className="space-y-3">
-              {savedResults.map((result) => (
-                <div key={result.id} className="flex items-center gap-4 p-4 rounded-2xl border border-border hover:bg-muted/30 transition-colors group">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg shrink-0 ${
-                    result.score >= 80 ? "bg-primary/10 text-primary" : result.score >= 60 ? "bg-accent/10 text-accent-foreground" : "bg-destructive/10 text-destructive"
+              {filteredResults.map((result) => (
+                <div
+                  key={result.id}
+                  className={`flex items-center gap-4 p-4 rounded-2xl border transition-all group cursor-pointer ${
+                    compareSelection.includes(result.id)
+                      ? "border-primary/50 bg-primary/5 ring-1 ring-primary/20"
+                      : "border-border hover:bg-muted/30"
+                  }`}
+                  onClick={() => toggleCompareSelect(result.id)}
+                >
+                  {/* Status + Score */}
+                  <div className={`w-14 h-14 rounded-xl flex flex-col items-center justify-center shrink-0 ${
+                    result.status === "error" ? "bg-destructive/10" :
+                    result.score >= 80 ? "bg-primary/10" : result.score >= 60 ? "bg-accent/10" : "bg-destructive/10"
                   }`}>
-                    {result.score}
+                    {result.status === "error" ? (
+                      <XCircle className="h-6 w-6 text-destructive" />
+                    ) : (
+                      <>
+                        <span className={`text-lg font-black ${
+                          result.score >= 80 ? "text-primary" : result.score >= 60 ? "text-accent-foreground" : "text-destructive"
+                        }`}>{result.score}</span>
+                        <span className="text-[10px] text-muted-foreground">/100</span>
+                      </>
+                    )}
                   </div>
+
+                  {/* Info */}
                   <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        result.status === "passed" ? "bg-primary/10 text-primary" :
+                        result.status === "error" ? "bg-destructive/10 text-destructive" :
+                        "bg-destructive/10 text-destructive"
+                      }`}>
+                        {result.status === "passed" ? "✅ ناجح" : result.status === "error" ? "⚠️ خطأ" : "❌ فاشل"}
+                      </span>
+                      {compareSelection.includes(result.id) && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/20 text-primary font-bold">مختار للمقارنة</span>
+                      )}
+                    </div>
                     <p className="text-sm font-medium text-foreground truncate">{result.prompt || "اختبار نموذجي"}</p>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
                       <span>{result.fileCount} ملف</span>
                       <span>{result.totalLines.toLocaleString()} سطر</span>
-                      {result.buildTime && <span>{formatTime(result.buildTime)}</span>}
+                      {result.buildTime != null && <span>⏱️ {formatTime(result.buildTime)}</span>}
                       <span>{new Date(result.timestamp).toLocaleDateString("ar-SA")}</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
                     <button
-                      onClick={() => { setReport(result.report); setBuiltFiles([]); toast.info("تم تحميل النتيجة"); }}
-                      className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      onClick={() => setDetailResult(result)}
+                      className="p-2 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      title="تفاصيل"
                     >
-                      عرض
+                      <Eye className="h-4 w-4" />
                     </button>
+                    {result.status !== "error" && (
+                      <button
+                        onClick={() => { setReport(result.report); setBuiltFiles([]); toast.info("تم تحميل النتيجة"); }}
+                        className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                      >
+                        عرض
+                      </button>
+                    )}
                     <button
                       onClick={() => deleteTestResult(result.id)}
-                      className="text-xs px-3 py-1.5 rounded-lg border border-destructive/30 hover:bg-destructive/10 transition-colors text-destructive opacity-0 group-hover:opacity-100"
+                      className="p-2 rounded-lg border border-destructive/30 hover:bg-destructive/10 transition-colors text-destructive opacity-0 group-hover:opacity-100"
+                      title="حذف"
                     >
-                      حذف
+                      <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -948,6 +1324,11 @@ export default function TestQualityPage() {
           </button>
         </div>
       </div>
+
+      {/* Detail Modal */}
+      {detailResult && (
+        <DetailView result={detailResult} onClose={() => setDetailResult(null)} />
+      )}
     </div>
   );
 }
