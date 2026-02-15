@@ -130,13 +130,21 @@ export function useBuildEngine({
       const token = await getAuthToken();
       if (!token) throw new Error("Authentication failed");
 
-      // Context-Aware Payload: Include file names AND truncated content for modification planning
-      const vfsContext = files.map(f => ({ 
-        path: f.name, 
-        type: 'file',
-        // Send first 500 chars of content so planner understands existing structure
-        preview: f.content.slice(0, 500) + (f.content.length > 500 ? '...' : '')
-      }));
+      // Enhanced Context-Aware Payload: structured metadata + content preview
+      const vfsContext = files.map(f => {
+        const lines = f.content.split('\n');
+        return {
+          path: f.name,
+          type: 'file',
+          language: f.language || 'tsx',
+          lines: lines.length,
+          size: f.content.length,
+          // Send more content for smaller files, less for larger ones
+          preview: f.content.length <= 1500
+            ? f.content
+            : f.content.slice(0, 800) + '\n// ... [truncated] ...\n' + f.content.slice(-300),
+        };
+      });
       const conversationHistory = messages.map(({ role, content }) => ({ role, content }));
 
       await streamBarqPlanner(
@@ -222,7 +230,11 @@ export function useBuildEngine({
           buildPrompt: buildPromptContent,
           projectId,
           dependencyGraph: currentDependencyGraph,
-          existingFiles: files.map(f => ({ path: f.name, content: f.content }))
+          existingFiles: files.map(f => ({
+            path: f.name,
+            content: f.content,
+            language: f.language || 'tsx',
+          }))
         },
         { // Callbacks object is now the second argument
           onThinkingStep: (step) => {

@@ -1,24 +1,30 @@
 import { VFSFile } from "@/hooks/v2/useVFS";
 import { Globe, RefreshCw, Loader2 } from "lucide-react";
-import { useMemo, useState, useCallback, useEffect } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { buildPreviewHTML } from "@/lib/preview-builder";
 
 interface PreviewPanelProps {
   files: VFSFile[];
   device: "desktop" | "tablet" | "mobile";
+  onIframeError?: (errorMessage: string, componentStack: string) => void;
 }
 
-export function PreviewPanel({ files, device }: PreviewPanelProps) {
+export function PreviewPanel({ files, device, onIframeError }: PreviewPanelProps) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const previewHTML = useMemo(() => {
     if (files.length === 0) return null;
-    return buildPreviewHTML(files as any);
+    try {
+      return buildPreviewHTML(files as any);
+    } catch (err) {
+      console.error("[PreviewPanel] Build error:", err);
+      return null;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files, refreshKey]);
 
-  // Show loading briefly when files change
   useEffect(() => {
     if (files.length > 0) {
       setIsLoading(true);
@@ -26,6 +32,17 @@ export function PreviewPanel({ files, device }: PreviewPanelProps) {
       return () => clearTimeout(t);
     }
   }, [files, refreshKey]);
+
+  // Listen for errors from the iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === "preview-error" && onIframeError) {
+        onIframeError(event.data.message || "Unknown error", event.data.stack || "");
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [onIframeError]);
 
   const handleRefresh = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -49,7 +66,21 @@ export function PreviewPanel({ files, device }: PreviewPanelProps) {
     }
   }, [device]);
 
-  if (!previewHTML) {
+  // Inject error catching script into the preview HTML
+  const enhancedHTML = useMemo(() => {
+    if (!previewHTML) return null;
+    const errorScript = `<script>
+      window.onerror = function(msg, url, line, col, error) {
+        window.parent.postMessage({ type: 'preview-error', message: msg, stack: error?.stack || '' }, '*');
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        window.parent.postMessage({ type: 'preview-error', message: e.reason?.message || String(e.reason), stack: e.reason?.stack || '' }, '*');
+      });
+    <\/script>`;
+    return previewHTML.replace("</head>", `${errorScript}\n</head>`);
+  }, [previewHTML]);
+
+  if (!enhancedHTML) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
         <div className="w-20 h-20 rounded-2xl bg-secondary border border-border flex items-center justify-center mb-6">
@@ -89,8 +120,9 @@ export function PreviewPanel({ files, device }: PreviewPanelProps) {
           </div>
         )}
         <iframe
+          ref={iframeRef}
           key={refreshKey}
-          srcDoc={previewHTML}
+          srcDoc={enhancedHTML}
           className="border-0 shadow-lg rounded-lg bg-white transition-all duration-300 ease-in-out"
           style={{ width: deviceWidth, height: deviceHeight }}
           sandbox="allow-scripts"
