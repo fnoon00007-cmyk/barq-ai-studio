@@ -317,6 +317,12 @@ export default function BuilderPage() {
                     <p className="text-xs text-muted-foreground text-center">
                       {engine.state.phaseProgress.phaseLabel}
                     </p>
+                    {engine.state.serverSideBuild && (
+                      <p className="text-xs text-primary text-center mt-1 flex items-center justify-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                        يعمل على السيرفر — يمكنك إغلاق المتصفح 💾
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -550,6 +556,12 @@ export default function BuilderPage() {
                     </div>
                   ))}
                 </div>
+                {engine.state.serverSideBuild && (
+                  <p className="text-xs text-primary text-center flex items-center justify-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                    يعمل على السيرفر — يمكنك إغلاق المتصفح والعودة لاحقاً 💾
+                  </p>
+                )}
               </div>
             )}
 
