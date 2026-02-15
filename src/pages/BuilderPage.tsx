@@ -7,6 +7,7 @@ import { PromptTemplates } from "@/components/PromptTemplates";
 import { ExpandableMessage } from "@/components/ExpandableMessage";
 import { DynamicTypingIndicator } from "@/components/DynamicTypingIndicator";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { BUILD_PHASES } from "@/lib/barq-api";
 import { useBuilderChat } from "@/hooks/v2/useBuilderChat";
 import { useBuildEngine } from "@/hooks/v2/useBuildEngine";
 import { useVFS } from "@/hooks/v2/useVFS";
@@ -297,6 +298,28 @@ export default function BuilderPage() {
 
                 {chat.messages.map((msg) => renderMessage(msg, true))}
 
+                {/* Phase Progress */}
+                {engine.state.phaseProgress && engine.state.isBuilding && (
+                  <div className="mx-2 p-4 rounded-2xl bg-secondary/50 border border-border space-y-3 animate-slide-up">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-bold text-foreground">⚡ البناء على مراحل</span>
+                      <span className="text-muted-foreground font-mono">{engine.state.phaseProgress.currentPhase}/4</span>
+                    </div>
+                    <div className="flex gap-1.5">
+                      {[1, 2, 3, 4].map((p) => (
+                        <div key={p} className={`h-2 flex-1 rounded-full transition-all duration-500 ${
+                          engine.state.phaseProgress!.completedPhases.includes(p) ? "bg-primary" :
+                          engine.state.phaseProgress!.currentPhase === p ? "bg-primary/50 animate-pulse" :
+                          "bg-muted"
+                        }`} />
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground text-center">
+                      {engine.state.phaseProgress.phaseLabel}
+                    </p>
+                  </div>
+                )}
+
                 {/* Build button */}
                 {engine.state.buildPrompt && !engine.state.isBuilding && !engine.state.isThinking && (
                   <div className="flex justify-center">
@@ -501,6 +524,34 @@ export default function BuilderPage() {
             ) : null}
 
             {chat.messages.map((msg) => renderMessage(msg))}
+
+            {/* Phase Progress (Desktop) */}
+            {engine.state.phaseProgress && engine.state.isBuilding && (
+              <div className="p-5 rounded-2xl bg-secondary/50 border border-border space-y-3 animate-slide-up">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-bold text-foreground">⚡ البناء على مراحل</span>
+                  <span className="text-muted-foreground font-mono">{engine.state.phaseProgress.currentPhase}/4</span>
+                </div>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 4].map((p) => (
+                    <div key={p} className="flex-1 space-y-1">
+                      <div className={`h-2.5 rounded-full transition-all duration-500 ${
+                        engine.state.phaseProgress!.completedPhases.includes(p) ? "bg-primary" :
+                        engine.state.phaseProgress!.currentPhase === p ? "bg-primary/50 animate-pulse" :
+                        "bg-muted"
+                      }`} />
+                      <p className={`text-[10px] text-center font-medium ${
+                        engine.state.phaseProgress!.completedPhases.includes(p) ? "text-primary" :
+                        engine.state.phaseProgress!.currentPhase === p ? "text-foreground" :
+                        "text-muted-foreground"
+                      }`}>
+                        {BUILD_PHASES[p - 1]?.label}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {engine.state.buildPrompt && !engine.state.isBuilding && !engine.state.isThinking && (
               <div className="flex justify-center animate-slide-up">
