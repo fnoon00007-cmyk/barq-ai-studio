@@ -226,6 +226,11 @@ export function useBuildEngine({
           await saveProject();
           toast.success("✅ اكتمل البناء السيرفري بنجاح!");
 
+          // Browser Notification (works even in background tabs)
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("⚡ برق — اكتمل البناء!", { body: "موقعك جاهز للمعاينة الآن", icon: "/favicon.png" });
+          }
+
           // Auto review
           const buildPrompt = job.build_prompt;
           if (allFiles.length > 0 && buildPrompt) {
@@ -451,6 +456,11 @@ export function useBuildEngine({
     const buildPromptContent = state.buildPrompt;
     const currentDependencyGraph = state.dependencyGraph;
     const isModification = files.length > 0;
+
+    // Request browser notification permission for server-side builds
+    if (!isModification && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
     
     dispatch({ type: "SET_BUILD_PROMPT", payload: { prompt: null } });
 
