@@ -54,6 +54,9 @@ export default function LandingPage() {
             <button onClick={() => navigate("/templates")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               القوالب
             </button>
+            <button onClick={() => navigate("/test-quality")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              🧪 اختبر الجودة
+            </button>
             <button onClick={() => navigate("/pricing")} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               الأسعار
             </button>
