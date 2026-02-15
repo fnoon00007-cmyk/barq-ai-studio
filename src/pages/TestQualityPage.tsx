@@ -209,6 +209,50 @@ export default function TestQualityPage() {
   const [pendingJob, setPendingJob] = useState<any>(null);
   const [checkingResume, setCheckingResume] = useState(true);
 
+  // Saved test results history
+  interface SavedTestResult {
+    id: string;
+    prompt: string;
+    score: number;
+    passed: boolean;
+    fileCount: number;
+    totalLines: number;
+    buildTime: number | null;
+    timestamp: Date;
+    report: CodeQualityReport;
+  }
+  const [savedResults, setSavedResults] = useState<SavedTestResult[]>(() => {
+    try {
+      const stored = localStorage.getItem("barq_test_results");
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
+
+  // Persist results to localStorage
+  useEffect(() => {
+    localStorage.setItem("barq_test_results", JSON.stringify(savedResults));
+  }, [savedResults]);
+
+  const saveTestResult = useCallback((testReport: CodeQualityReport, buildTimeSeconds: number | null) => {
+    const newResult: SavedTestResult = {
+      id: crypto.randomUUID(),
+      prompt: prompt.slice(0, 120),
+      score: testReport.score,
+      passed: testReport.passed,
+      fileCount: testReport.files.length,
+      totalLines: testReport.files.reduce((s, f) => s + f.lines, 0),
+      buildTime: buildTimeSeconds,
+      timestamp: new Date(),
+      report: testReport,
+    };
+    setSavedResults(prev => [newResult, ...prev]);
+  }, [prompt]);
+
+  const deleteTestResult = useCallback((id: string) => {
+    setSavedResults(prev => prev.filter(r => r.id !== id));
+    toast.success("تم حذف النتيجة");
+  }, []);
+
   // Timer effect
   useEffect(() => {
     if (isBuilding || isAnalyzing) {
@@ -267,9 +311,13 @@ export default function TestQualityPage() {
             setIsAnalyzing(false);
             setBuildPhase("");
             setCurrentPhaseNum(0);
+            const buildTime = buildStartRef.current > 0 ? Math.floor((Date.now() - buildStartRef.current) / 1000) : null;
             toast.success(`✅ البناء اكتمل: ${result.score}/100`);
 
-            // Save quality report
+            // Save to history
+            saveTestResult(result, buildTime);
+
+            // Save quality report to DB
             supabase.from("build_jobs").update({
               quality_score: result.score,
               quality_report: result as any,
@@ -348,7 +396,16 @@ export default function TestQualityPage() {
       }
     };
     check();
-  }, [subscribeToJob]);
+
+    // Auto-sync when returning to tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !isBuilding) {
+        check();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [subscribeToJob, isBuilding]);
 
   // ─── Start server-side build ───
   const handleTest = async () => {
@@ -463,9 +520,11 @@ export default function TestQualityPage() {
     setBuiltFiles(SAMPLE_FILES);
     setBuildPhase("🔍 تحليل النموذج...");
     setTimeout(() => {
-      setReport(validateCodeQuality(SAMPLE_FILES));
+      const result = validateCodeQuality(SAMPLE_FILES);
+      setReport(result);
       setIsAnalyzing(false);
       setBuildPhase("");
+      saveTestResult(result, null);
     }, 800);
   };
 
@@ -792,6 +851,60 @@ export default function TestQualityPage() {
               </button>
             </div>
           </div>
+        )}
+
+        {/* ─── Saved Test Results History ─── */}
+        {savedResults.length > 0 && (
+          <section className="bg-card border border-border rounded-3xl p-8 sm:p-10 shadow-sm mt-8">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold text-foreground flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <BarChart3 className="h-5 w-5 text-primary" />
+                </div>
+                سجل الاختبارات ({savedResults.length})
+              </h2>
+              <button
+                onClick={() => { setSavedResults([]); toast.success("تم مسح جميع النتائج"); }}
+                className="text-xs text-destructive hover:text-destructive/80 font-medium transition-colors"
+              >
+                مسح الكل
+              </button>
+            </div>
+            <div className="space-y-3">
+              {savedResults.map((result) => (
+                <div key={result.id} className="flex items-center gap-4 p-4 rounded-2xl border border-border hover:bg-muted/30 transition-colors group">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black text-lg shrink-0 ${
+                    result.score >= 80 ? "bg-primary/10 text-primary" : result.score >= 60 ? "bg-accent/10 text-accent-foreground" : "bg-destructive/10 text-destructive"
+                  }`}>
+                    {result.score}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{result.prompt || "اختبار نموذجي"}</p>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-1">
+                      <span>{result.fileCount} ملف</span>
+                      <span>{result.totalLines.toLocaleString()} سطر</span>
+                      {result.buildTime && <span>{formatTime(result.buildTime)}</span>}
+                      <span>{new Date(result.timestamp).toLocaleDateString("ar-SA")}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => { setReport(result.report); setBuiltFiles([]); toast.info("تم تحميل النتيجة"); }}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                    >
+                      عرض
+                    </button>
+                    <button
+                      onClick={() => deleteTestResult(result.id)}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-destructive/30 hover:bg-destructive/10 transition-colors text-destructive opacity-0 group-hover:opacity-100"
+                    >
+                      حذف
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
 
         <div className="text-center mt-8">

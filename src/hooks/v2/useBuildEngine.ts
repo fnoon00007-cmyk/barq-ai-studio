@@ -274,13 +274,14 @@ export function useBuildEngine({
     return channel;
   }, [applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject]);
 
-  // --- Check for active server-side builds on mount ---
+  // --- Check for active/completed server-side builds on mount AND on tab focus ---
   useEffect(() => {
     if (!userId) return;
     
     const checkActiveBuilds = async () => {
       try {
-        const { data: jobs } = await supabase
+        // Check for active builds
+        const { data: activeJobs } = await supabase
           .from("build_jobs")
           .select("*")
           .eq("user_id", userId)
@@ -288,8 +289,8 @@ export function useBuildEngine({
           .order("started_at", { ascending: false })
           .limit(1);
 
-        if (jobs && jobs.length > 0) {
-          const job = jobs[0];
+        if (activeJobs && activeJobs.length > 0) {
+          const job = activeJobs[0];
           dispatch({ type: "SET_STATUS", payload: { isBuilding: true, isThinking: true, activeJobId: job.id, serverSideBuild: true } });
           
           const curPhase = getCurrentPhaseFromStatus(job.status);
@@ -320,6 +321,47 @@ export function useBuildEngine({
           
           subscribeToJob(job.id, assistantMsgId);
           toast.info("🔄 متصل ببناء سيرفري جاري — يمكنك إغلاق المتصفح بأمان");
+          return;
+        }
+
+        // Check for recently completed builds that weren't applied yet (user was away)
+        const { data: completedJobs } = await supabase
+          .from("build_jobs")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("status", "completed")
+          .order("completed_at", { ascending: false })
+          .limit(1);
+
+        if (completedJobs && completedJobs.length > 0) {
+          const job = completedJobs[0];
+          const completedAt = new Date(job.completed_at || job.updated_at).getTime();
+          const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+          
+          // Only auto-apply if completed recently (within 5 minutes)
+          if (completedAt > fiveMinutesAgo && !state.isBuilding) {
+            const allFiles = extractFilesFromJob(job);
+            if (allFiles.length > 0) {
+              const ops = allFiles.map((f: any) => ({
+                path: f.name || f.path,
+                content: f.content,
+                action: "create" as const,
+              }));
+              await applyVFSOperations(ops, "بناء سيرفري مكتمل — مزامنة تلقائية");
+              await saveProject();
+              toast.success("✅ تم تطبيق البناء المكتمل تلقائياً!");
+
+              const assistantMsgId = crypto.randomUUID();
+              addMessage({
+                id: assistantMsgId,
+                role: "assistant",
+                content: "✅ تم مزامنة البناء المكتمل تلقائياً — موقعك جاهز للمعاينة!",
+                timestamp: new Date(),
+                pipelineStage: "done",
+              });
+              await saveMessage({ role: "assistant", content: "تم مزامنة البناء المكتمل تلقائياً" });
+            }
+          }
         }
       } catch (err) {
         console.warn("Failed to check active builds:", err);
@@ -327,7 +369,16 @@ export function useBuildEngine({
     };
 
     checkActiveBuilds();
-  }, [userId, addMessage, subscribeToJob]);
+
+    // Re-check when user returns to tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        checkActiveBuilds();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [userId, addMessage, subscribeToJob, applyVFSOperations, saveProject, saveMessage]);
 
   // --- Phase 1: Strategic Planning (Gemini 2.0 Flash Thinking) ---
   const handleSendMessage = useCallback(async (content: string, isFixAttempt: boolean = false) => {
