@@ -107,6 +107,9 @@ async function collectStreamedToolCall(response: Response): Promise<string> {
   return toolCallArgs;
 }
 
+// ─── Delay helper ───
+function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
 // ─── Try multiple API keys ───
 async function tryKeys(keys: string[], url: string, body: string, label: string): Promise<Response | null> {
   for (const key of keys) {
@@ -123,7 +126,10 @@ async function tryKeys(keys: string[], url: string, body: string, label: string)
   return null;
 }
 
-// ─── Call AI for a single phase ───
+// ─── Call AI for a single phase with retry ───
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [15000, 30000, 60000];
+
 async function callAIForPhase(
   messages: Array<{role: string; content: string}>,
   toolsDef: any[],
@@ -132,18 +138,34 @@ async function callAIForPhase(
   const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
   const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
 
-  let response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini");
-  if (!response) response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq");
-  if (!response && lovableKey) {
-    const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" }, body: lb });
-    if (res.ok) response = res;
-  }
-  if (!response) return null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const waitMs = RETRY_DELAYS[attempt - 1] || 60000;
+      console.log(`[retry] Attempt ${attempt + 1}/${MAX_RETRIES + 1} — waiting ${waitMs / 1000}s...`);
+      await delay(waitMs);
+    }
 
-  const args = await collectStreamedToolCall(response);
-  if (!args) return null;
-  try { return JSON.parse(args); } catch { return null; }
+    let response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini");
+    if (!response) response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq");
+    if (!response && lovableKey) {
+      const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" }, body: lb });
+      if (res.ok) response = res;
+    }
+
+    if (response) {
+      const args = await collectStreamedToolCall(response);
+      if (args) {
+        try { return JSON.parse(args); } catch { console.error("[parse] Failed to parse tool call args"); }
+      }
+      console.warn("[stream] No tool call args, retrying...");
+      continue;
+    }
+    console.warn(`[retry] All providers failed on attempt ${attempt + 1}`);
+  }
+
+  console.error("[callAI] All retries exhausted");
+  return null;
 }
 
 // ─── MAIN HANDLER ───
