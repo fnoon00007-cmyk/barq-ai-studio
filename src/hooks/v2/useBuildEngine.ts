@@ -1,9 +1,10 @@
 
-import { useState, useCallback, useRef, useReducer } from "react";
+import { useState, useCallback, useRef, useReducer, useEffect } from "react";
 import { toast } from "sonner";
 import { streamBarqPlanner, streamBarqBuilder, streamBarqFixer, reviewBuild, BUILD_PHASES } from "@/lib/barq-api";
 import { VFSFile, VFSOperation } from "./useVFS";
 import { ChatMessage, ThinkingStep } from "./useBuilderChat";
+import { supabase } from "@/integrations/supabase/client";
 
 // --- Types and Interfaces ---
 
@@ -25,10 +26,12 @@ interface BuildEngineState {
   error: string | null;
   dependencyGraph: any | null;
   phaseProgress: BuildPhaseProgress | null;
+  activeJobId: string | null;
+  serverSideBuild: boolean;
 }
 
 type BuildEngineAction =
-  | { type: "SET_STATUS"; payload: { isThinking?: boolean; isBuilding?: boolean; reviewStatus?: BuildEngineState["reviewStatus"]; error?: string | null } }
+  | { type: "SET_STATUS"; payload: Partial<Pick<BuildEngineState, "isThinking" | "isBuilding" | "reviewStatus" | "error" | "activeJobId" | "serverSideBuild">> }
   | { type: "SET_BUILD_PROMPT"; payload: { prompt: string | null; projectName?: string | null; dependencyGraph?: any } }
   | { type: "SET_FIX_SUGGESTION"; payload: { operations: VFSOperation[]; summary: string } | null }
   | { type: "SET_PHASE_PROGRESS"; payload: BuildPhaseProgress | null }
@@ -57,6 +60,8 @@ const initialState: BuildEngineState = {
   dependencyGraph: null,
   fixSuggestion: null,
   phaseProgress: null,
+  activeJobId: null,
+  serverSideBuild: false,
 };
 
 const buildEngineReducer = (state: BuildEngineState, action: BuildEngineAction): BuildEngineState => {
@@ -81,9 +86,33 @@ const buildEngineReducer = (state: BuildEngineState, action: BuildEngineAction):
   }
 };
 
+// --- Helper: extract VFS files from a build_jobs row ---
+function extractFilesFromJob(job: any): VFSFile[] {
+  const files: VFSFile[] = [];
+  for (let i = 1; i <= 4; i++) {
+    const pf = job[`phase_${i}_files`];
+    if (Array.isArray(pf)) files.push(...pf);
+  }
+  return files;
+}
+
+function getCompletedPhases(job: any): number[] {
+  const phases: number[] = [];
+  for (let i = 1; i <= 4; i++) {
+    const pf = job[`phase_${i}_files`];
+    if (Array.isArray(pf) && pf.length > 0) phases.push(i);
+  }
+  return phases;
+}
+
+function getCurrentPhaseFromStatus(status: string): number {
+  const match = status.match(/building_phase_(\d)/);
+  return match ? parseInt(match[1]) : 0;
+}
+
 /**
  * useBuildEngine - The Core Orchestrator for Barq AI
- * Now upgraded to support Context-Aware Refinement and Iterative Builds.
+ * Server-side worker for new builds, client-side streaming for modifications.
  */
 export function useBuildEngine({
   userId,
@@ -100,7 +129,18 @@ export function useBuildEngine({
   const [state, dispatch] = useReducer(buildEngineReducer, initialState);
   const abortControllerRef = useRef<AbortController | null>(null);
   const fixAttemptsRef = useRef<number>(0);
+  const realtimeChannelRef = useRef<any>(null);
   const MAX_FIX_ATTEMPTS = 2;
+
+  // --- Cleanup realtime on unmount ---
+  useEffect(() => {
+    return () => {
+      if (realtimeChannelRef.current) {
+        supabase.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
+    };
+  }, []);
 
   const handleAbort = useCallback(() => {
     if (abortControllerRef.current) {
@@ -108,10 +148,183 @@ export function useBuildEngine({
       dispatch({ type: "SET_STATUS", payload: { isThinking: false, isBuilding: false } });
       toast.info("تم إلغاء العملية.");
     }
-  }, []);
+    // Cancel server-side job if active
+    if (state.activeJobId) {
+      supabase.from("build_jobs").update({ status: "cancelled" }).eq("id", state.activeJobId);
+      if (realtimeChannelRef.current) {
+        supabase.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
+      dispatch({ type: "SET_STATUS", payload: { activeJobId: null, serverSideBuild: false } });
+    }
+  }, [state.activeJobId]);
+
+  // --- Subscribe to Realtime updates for a server-side build job ---
+  const subscribeToJob = useCallback((jobId: string, assistantMsgId: string) => {
+    // Remove old channel
+    if (realtimeChannelRef.current) {
+      supabase.removeChannel(realtimeChannelRef.current);
+    }
+
+    const channel = supabase
+      .channel(`build_job_${jobId}`)
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "build_jobs",
+        filter: `id=eq.${jobId}`,
+      }, async (payload) => {
+        const job = payload.new as any;
+        console.log("[realtime] Job update:", job.status, "phase:", job.current_phase);
+
+        const completedPh = getCompletedPhases(job);
+        const curPhase = getCurrentPhaseFromStatus(job.status);
+
+        if (curPhase > 0) {
+          const phaseInfo = BUILD_PHASES[curPhase - 1];
+          dispatch({
+            type: "SET_PHASE_PROGRESS",
+            payload: {
+              currentPhase: curPhase,
+              totalPhases: 4,
+              phaseLabel: phaseInfo?.label || "",
+              completedPhases: completedPh,
+              phaseFiles: {},
+            },
+          });
+          updateMessage(assistantMsgId, {
+            content: `⚡ المرحلة ${curPhase}/4: ${phaseInfo?.label || ""} — ${phaseInfo?.files.join("، ") || ""}`,
+          });
+        }
+
+        // Phase completion toasts
+        for (const p of completedPh) {
+          const phaseInfo = BUILD_PHASES[p - 1];
+          if (phaseInfo) {
+            // Toast only once per phase (simple heuristic)
+          }
+        }
+
+        // Build completed
+        if (job.status === "completed") {
+          const allFiles = extractFilesFromJob(job);
+          
+          // Apply all files to VFS
+          if (allFiles.length > 0) {
+            const ops: VFSOperation[] = allFiles.map((f: any) => ({
+              path: f.name || f.path,
+              content: f.content,
+              action: "create" as const,
+            }));
+            await applyVFSOperations(ops, "بناء سيرفري مكتمل");
+          }
+
+          dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+          dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false, activeJobId: null, serverSideBuild: false } });
+          updateMessage(assistantMsgId, { content: "اكتمل البناء! ✅", isStreaming: false, pipelineStage: "done" });
+          await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
+          await saveProject();
+          toast.success("✅ اكتمل البناء السيرفري بنجاح!");
+
+          // Auto review
+          const buildPrompt = job.build_prompt;
+          if (allFiles.length > 0 && buildPrompt) {
+            dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
+            try {
+              const reviewFiles = allFiles.map((f: any) => ({
+                path: f.name || f.path, content: f.content, language: (f.name || f.path)?.endsWith(".css") ? "css" : "tsx",
+              }));
+              const reviewResult = await reviewBuild(buildPrompt, reviewFiles);
+              if (reviewResult.status === "approved") {
+                dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
+                const reviewMsgId = crypto.randomUUID();
+                addMessage({ id: reviewMsgId, role: "assistant", content: `✅ ${reviewResult.summary_ar}`, timestamp: new Date(), pipelineStage: "done" });
+                await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
+                setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
+              } else {
+                dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+              }
+            } catch {
+              dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+            }
+          }
+
+          supabase.removeChannel(channel);
+          realtimeChannelRef.current = null;
+        }
+
+        // Build failed
+        if (job.status?.startsWith("failed")) {
+          dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false, activeJobId: null, serverSideBuild: false, error: "فشل البناء في المرحلة " + job.current_phase } });
+          dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+          updateMessage(assistantMsgId, { content: "فشل البناء ❌", isStreaming: false });
+          toast.error("فشل البناء في المرحلة " + job.current_phase);
+          supabase.removeChannel(channel);
+          realtimeChannelRef.current = null;
+        }
+      })
+      .subscribe();
+
+    realtimeChannelRef.current = channel;
+    return channel;
+  }, [applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject]);
+
+  // --- Check for active server-side builds on mount ---
+  useEffect(() => {
+    if (!userId) return;
+    
+    const checkActiveBuilds = async () => {
+      try {
+        const { data: jobs } = await supabase
+          .from("build_jobs")
+          .select("*")
+          .eq("user_id", userId)
+          .in("status", ["building_phase_1", "building_phase_2", "building_phase_3", "building_phase_4"])
+          .order("started_at", { ascending: false })
+          .limit(1);
+
+        if (jobs && jobs.length > 0) {
+          const job = jobs[0];
+          dispatch({ type: "SET_STATUS", payload: { isBuilding: true, isThinking: true, activeJobId: job.id, serverSideBuild: true } });
+          
+          const curPhase = getCurrentPhaseFromStatus(job.status);
+          const completedPh = getCompletedPhases(job);
+          if (curPhase > 0) {
+            const phaseInfo = BUILD_PHASES[curPhase - 1];
+            dispatch({
+              type: "SET_PHASE_PROGRESS",
+              payload: {
+                currentPhase: curPhase,
+                totalPhases: 4,
+                phaseLabel: phaseInfo?.label || "",
+                completedPhases: completedPh,
+                phaseFiles: {},
+              },
+            });
+          }
+
+          const assistantMsgId = crypto.randomUUID();
+          addMessage({
+            id: assistantMsgId,
+            role: "assistant",
+            content: `🔄 متصل ببناء جاري — المرحلة ${curPhase}/4`,
+            timestamp: new Date(),
+            isStreaming: true,
+            pipelineStage: "building",
+          });
+          
+          subscribeToJob(job.id, assistantMsgId);
+          toast.info("🔄 متصل ببناء سيرفري جاري — يمكنك إغلاق المتصفح بأمان");
+        }
+      } catch (err) {
+        console.warn("Failed to check active builds:", err);
+      }
+    };
+
+    checkActiveBuilds();
+  }, [userId, addMessage, subscribeToJob]);
 
   // --- Phase 1: Strategic Planning (Gemini 2.0 Flash Thinking) ---
-  // Now context-aware: analyzes existing VFS to plan diffs or new components.
   const handleSendMessage = useCallback(async (content: string, isFixAttempt: boolean = false) => {
     if (!userId) {
       toast.error("يرجى تسجيل الدخول للمتابعة");
@@ -146,7 +359,6 @@ export function useBuildEngine({
       const token = await getAuthToken();
       if (!token) throw new Error("Authentication failed");
 
-      // Enhanced Context-Aware Payload: structured metadata + content preview
       const vfsContext = files.map(f => {
         const lines = f.content.split('\n');
         return {
@@ -155,7 +367,6 @@ export function useBuildEngine({
           language: f.language || 'tsx',
           lines: lines.length,
           size: f.content.length,
-          // Send more content for smaller files, less for larger ones
           preview: f.content.length <= 1500
             ? f.content
             : f.content.slice(0, 800) + '\n// ... [truncated] ...\n' + f.content.slice(-300),
@@ -230,8 +441,9 @@ export function useBuildEngine({
     }
   }, [userId, projectId, messages, files, addMessage, updateMessage, saveMessage, getAuthToken]);
 
-  // --- Phase 2: Iterative Building (Groq Llama 3.3 70B) ---
-  // Now supports parallel execution and targeted file updates (Diffs).
+  // --- Phase 2: Building ---
+  // NEW BUILD → Server-side worker (survives browser close)
+  // MODIFICATION → Client-side streaming (fast, single pass)
   const handleStartBuild = useCallback(async () => {
     if (!state.buildPrompt || !userId) return;
 
@@ -250,7 +462,7 @@ export function useBuildEngine({
     addMessage({
       id: assistantMsgId,
       role: "assistant",
-      content: isModification ? "جاري تعديل الموقع..." : "جاري البناء على مراحل... ⚡",
+      content: isModification ? "جاري تعديل الموقع..." : "جاري البناء على السيرفر... ⚡",
       timestamp: new Date(),
       isStreaming: true,
       thinkingSteps: [],
@@ -266,8 +478,9 @@ export function useBuildEngine({
       if (!token) throw new Error("Authentication failed");
 
       if (isModification) {
-        // ─── MODIFICATION MODE: single-pass, no phases ───
+        // ─── MODIFICATION MODE: client-side single-pass (fast) ───
         dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+        dispatch({ type: "SET_STATUS", payload: { serverSideBuild: false } });
 
         await streamBarqBuilder(
           {
@@ -301,166 +514,139 @@ export function useBuildEngine({
           },
           abortControllerRef.current.signal
         );
-      } else {
-        // ─── NEW BUILD: multi-phase (4 phases) ───
-        for (let phaseNum = 1; phaseNum <= 4; phaseNum++) {
-          if (abortControllerRef.current?.signal.aborted) break;
 
-          const phase = BUILD_PHASES[phaseNum - 1];
-          
-          dispatch({
-            type: "SET_PHASE_PROGRESS",
-            payload: {
-              currentPhase: phaseNum,
-              totalPhases: 4,
-              phaseLabel: phase.label,
-              completedPhases: Array.from({ length: phaseNum - 1 }, (_, i) => i + 1),
-              phaseFiles: {},
-            },
-          });
+        // Apply modification files
+        const finalOps: VFSOperation[] = Array.from(allFileBuffers.entries()).map(([path, data]) => ({
+          path, content: data.content, action: data.action,
+        }));
 
-          updateMessage(assistantMsgId, {
-            content: `⚡ المرحلة ${phaseNum}/4: ${phase.label} — ${phase.files.join("، ")}`,
-          });
+        dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+        updateMessage(assistantMsgId, { content: "اكتمل التعديل! جارٍ المراجعة التلقائية... 🔍", isStreaming: false, pipelineStage: "reviewing" });
+        await saveMessage({ role: "assistant", content: "اكتمل التعديل!" });
+        await saveProject();
 
-          // Add phase thinking step
-          const phaseStep: ThinkingStep = { id: `phase-${phaseNum}`, label: `المرحلة ${phaseNum}: ${phase.label} (${phase.files.join(", ")})`, status: "loading" };
-          thinkingSteps.push(phaseStep);
-          updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
+        // Auto Review for modifications
+        if (finalOps.length > 0 && buildPromptContent) {
+          dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
+          try {
+            const reviewFiles = finalOps.map(op => ({
+              path: op.path, content: op.content || "", language: op.path.endsWith(".css") ? "css" : "tsx",
+            }));
+            const reviewResult = await reviewBuild(buildPromptContent, reviewFiles);
 
-          // Collect files from previous phases as context for consistency
-          const existingFromPrevPhases = Array.from(allFileBuffers.entries()).map(([path, data]) => ({
-            path,
-            content: data.content,
-            language: path.endsWith(".css") ? "css" : "tsx",
-          }));
-
-          const phaseFileBuffers = new Map<string, { content: string, action: VFSOperation['action'] }>();
-
-          await streamBarqBuilder(
-            {
-              buildPrompt: buildPromptContent,
-              projectId,
-              dependencyGraph: currentDependencyGraph,
-              existingFiles: existingFromPrevPhases,
-              phase: phaseNum,
-            },
-            {
-              onThinkingStep: (step) => {
-                const newStep: ThinkingStep = { id: String(thinkingSteps.length + 1), label: step, status: "completed" };
-                thinkingSteps.push(newStep);
-                updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
-              },
-              onFileStart: (path, action) => {
-                if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); }
-                phaseFileBuffers.set(path, { content: "", action: (action as VFSOperation['action']) || 'create' });
-              },
-              onFileChunk: (path, chunk) => {
-                const buf = phaseFileBuffers.get(path);
-                if (buf) buf.content += chunk;
-                else { phaseFileBuffers.set(path, { content: chunk, action: 'create' }); if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); } }
-              },
-              onFileDone: (path, content) => {
-                const buf = phaseFileBuffers.get(path);
-                if (buf) buf.content = content;
-                else { phaseFileBuffers.set(path, { content, action: 'create' }); if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); } }
-              },
-              onDone: () => {},
-              onError: (error) => { throw new Error(error); },
-            },
-            abortControllerRef.current.signal
-          );
-
-          // Apply this phase's files immediately
-          const phaseOps: VFSOperation[] = Array.from(phaseFileBuffers.entries()).map(([path, data]) => ({
-            path, content: data.content, action: data.action,
-          }));
-
-          if (phaseOps.length > 0) {
-            await applyVFSOperations(phaseOps, `المرحلة ${phaseNum}: ${phase.label}`);
-            // Merge into allFileBuffers
-            for (const [path, data] of phaseFileBuffers) {
-              allFileBuffers.set(path, data);
-            }
-          }
-
-          // Mark phase step as completed
-          const stepIdx = thinkingSteps.findIndex(s => s.id === `phase-${phaseNum}`);
-          if (stepIdx >= 0) {
-            thinkingSteps[stepIdx].status = "completed";
-            updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
-          }
-
-          toast.success(`المرحلة ${phaseNum}/4 اكتملت: ${phase.label} ⚡`);
-        }
-      }
-
-      // All phases done — finalize
-      const finalOps: VFSOperation[] = Array.from(allFileBuffers.entries()).map(([path, data]) => ({
-        path, content: data.content, action: data.action,
-      }));
-
-      dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
-      updateMessage(assistantMsgId, { content: "اكتمل البناء! جارٍ المراجعة التلقائية... 🔍", isStreaming: false, pipelineStage: "reviewing" });
-      await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
-      await saveProject();
-
-      // --- Auto Review Phase ---
-      if (finalOps.length > 0 && buildPromptContent) {
-        dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
-        try {
-          const reviewFiles = finalOps.map(op => ({
-            path: op.path, content: op.content || "", language: op.path.endsWith(".css") ? "css" : "tsx",
-          }));
-          const reviewResult = await reviewBuild(buildPromptContent, reviewFiles);
-
-          if (reviewResult.status === "approved") {
-            fixAttemptsRef.current = 0;
-            dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
-            const reviewMsgId = crypto.randomUUID();
-            addMessage({ id: reviewMsgId, role: "assistant", content: `✅ ${reviewResult.summary_ar}`, timestamp: new Date(), pipelineStage: "done" });
-            await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
-            setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
-          } else if (reviewResult.status === "needs_fix" && reviewResult.fix_prompt) {
-            if (fixAttemptsRef.current >= MAX_FIX_ATTEMPTS) {
+            if (reviewResult.status === "approved") {
               fixAttemptsRef.current = 0;
-              dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
-              const issuesSummary = reviewResult.issues.map(i => `• ${i.file}: ${i.issue}`).join("\n");
+              dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
               const reviewMsgId = crypto.randomUUID();
-              addMessage({ id: reviewMsgId, role: "assistant", content: `⚠️ المراجعة وجدت مشاكل لم يتم حلها بعد ${MAX_FIX_ATTEMPTS} محاولات:\n${issuesSummary}`, timestamp: new Date(), pipelineStage: "done" });
-              await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+              addMessage({ id: reviewMsgId, role: "assistant", content: `✅ ${reviewResult.summary_ar}`, timestamp: new Date(), pipelineStage: "done" });
+              await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
+              setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
+            } else if (reviewResult.status === "needs_fix" && reviewResult.fix_prompt) {
+              if (fixAttemptsRef.current >= MAX_FIX_ATTEMPTS) {
+                fixAttemptsRef.current = 0;
+                dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+                const issuesSummary = reviewResult.issues.map(i => `• ${i.file}: ${i.issue}`).join("\n");
+                const reviewMsgId = crypto.randomUUID();
+                addMessage({ id: reviewMsgId, role: "assistant", content: `⚠️ المراجعة وجدت مشاكل لم يتم حلها بعد ${MAX_FIX_ATTEMPTS} محاولات:\n${issuesSummary}`, timestamp: new Date(), pipelineStage: "done" });
+                await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+              } else {
+                fixAttemptsRef.current += 1;
+                dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
+                const issuesSummary = reviewResult.issues.map(i => `• ${i.file}: ${i.issue}`).join("\n");
+                const reviewMsgId = crypto.randomUUID();
+                addMessage({ id: reviewMsgId, role: "assistant", content: `🔧 المراجعة وجدت مشاكل (محاولة ${fixAttemptsRef.current}/${MAX_FIX_ATTEMPTS}):\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`, timestamp: new Date() });
+                await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+                handleSendMessage(reviewResult.fix_prompt, true);
+              }
             } else {
-              fixAttemptsRef.current += 1;
-              dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
-              const issuesSummary = reviewResult.issues.map(i => `• ${i.file}: ${i.issue}`).join("\n");
-              const reviewMsgId = crypto.randomUUID();
-              addMessage({ id: reviewMsgId, role: "assistant", content: `🔧 المراجعة وجدت مشاكل (محاولة ${fixAttemptsRef.current}/${MAX_FIX_ATTEMPTS}):\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`, timestamp: new Date() });
-              await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
-              handleSendMessage(reviewResult.fix_prompt, true);
+              dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
             }
-          } else {
+          } catch (reviewErr: any) {
+            console.warn("Auto-review failed (non-blocking):", reviewErr.message);
             dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
           }
-        } catch (reviewErr: any) {
-          console.warn("Auto-review failed (non-blocking):", reviewErr.message);
-          dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
         }
+
+        dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false } });
+
+      } else {
+        // ─── NEW BUILD: Server-side worker (survives browser close) ───
+        dispatch({ type: "SET_STATUS", payload: { serverSideBuild: true } });
+
+        updateMessage(assistantMsgId, {
+          content: "🚀 جاري إطلاق البناء على السيرفر...",
+        });
+
+        // Create job in DB
+        const { data: newJob, error: jobErr } = await supabase
+          .from("build_jobs")
+          .insert({
+            user_id: userId,
+            prompt: buildPromptContent.slice(0, 500),
+            build_prompt: buildPromptContent,
+            dependency_graph: currentDependencyGraph,
+            status: "building_phase_1",
+            current_phase: 0,
+          })
+          .select("id")
+          .single();
+
+        if (jobErr || !newJob) throw new Error("فشل إنشاء عملية البناء");
+
+        const jobId = newJob.id;
+        dispatch({ type: "SET_STATUS", payload: { activeJobId: jobId } });
+        dispatch({
+          type: "SET_PHASE_PROGRESS",
+          payload: {
+            currentPhase: 1,
+            totalPhases: 4,
+            phaseLabel: BUILD_PHASES[0].label,
+            completedPhases: [],
+            phaseFiles: {},
+          },
+        });
+
+        updateMessage(assistantMsgId, {
+          content: `⚡ المرحلة 1/4: ${BUILD_PHASES[0].label} — ${BUILD_PHASES[0].files.join("، ")}`,
+        });
+
+        // Subscribe to Realtime for job updates
+        subscribeToJob(jobId, assistantMsgId);
+
+        // Trigger server-side worker (fire-and-forget)
+        const workerUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-build-worker`;
+        const resp = await fetch(workerUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ job_id: jobId, phase_number: 1 }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: "فشل الاتصال بالسيرفر" }));
+          throw new Error(err.error || "Worker failed");
+        }
+
+        toast.success("🚀 بدأ البناء على السيرفر — يمكنك إغلاق المتصفح والعودة لاحقاً!");
+        // Don't set isBuilding to false here — Realtime will handle completion
       }
 
     } catch (err: any) {
       const isAbort = err.name === "AbortError";
       const errorMessage = isAbort ? "تم إيقاف عملية البناء." : err.message || "حدث خطأ أثناء البناء.";
       updateMessage(assistantMsgId, { content: errorMessage, isStreaming: false });
-      dispatch({ type: "SET_STATUS", payload: { error: errorMessage } });
+      dispatch({ type: "SET_STATUS", payload: { error: errorMessage, isBuilding: false, isThinking: false, activeJobId: null, serverSideBuild: false } });
       dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
       if (isAbort) toast.warning("تم إيقاف البناء.");
       else toast.error(`فشل البناء: ${errorMessage}`);
       saveMessage({ role: "assistant", content: errorMessage });
     } finally {
-      dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false } });
       abortControllerRef.current = null;
     }
-  }, [state.buildPrompt, state.dependencyGraph, userId, projectId, files, applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject, getAuthToken, handleSendMessage]);
+  }, [state.buildPrompt, state.dependencyGraph, userId, projectId, files, applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject, getAuthToken, handleSendMessage, subscribeToJob]);
 
   // --- Phase 3: Error Fixing (Gemini 2.0 Flash) ---
   const handleFixError = useCallback(async (errorMessage: string, componentStack: string) => {
@@ -487,7 +673,7 @@ export function useBuildEngine({
         {
           errorMessage,
           componentStack,
-          vfsContext: files.map(f => ({ path: f.name, content: f.content })) // Send full VFS for context
+          vfsContext: files.map(f => ({ path: f.name, content: f.content }))
         },
         {
           onFixReady: (operations, summary) => {
@@ -496,7 +682,6 @@ export function useBuildEngine({
           },
           onDone: () => {
             updateMessage(assistantMsgId, { isStreaming: false });
-            // No need to save message here, fix suggestion is handled separately
           },
           onError: (error) => {
             throw new Error(error);
