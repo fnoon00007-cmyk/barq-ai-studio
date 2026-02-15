@@ -110,18 +110,29 @@ async function collectStreamedToolCall(response: Response): Promise<string> {
 // ─── Delay helper ───
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-// ─── Try multiple API keys ───
+// ─── Try multiple API keys with per-request timeout ───
+const AI_CALL_TIMEOUT = 120_000; // 2 minutes per provider attempt
+
 async function tryKeys(keys: string[], url: string, body: string, label: string): Promise<Response | null> {
   for (const key of keys) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
-      body,
-    });
-    if (res.ok) { console.log(label + " ok"); return res; }
-    if (res.status === 429) { console.warn(label + " 429, next..."); continue; }
-    console.error(label + " error:", res.status);
-    continue;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), AI_CALL_TIMEOUT);
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) { console.log(label + " ok"); return res; }
+      if (res.status === 429) { console.warn(label + " 429, next..."); continue; }
+      console.error(label + " error:", res.status);
+      continue;
+    } catch (err) {
+      console.warn(label + " timeout/error:", err instanceof Error ? err.message : err);
+      continue;
+    }
   }
   return null;
 }
