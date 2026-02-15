@@ -17,6 +17,7 @@ import {
   LogOut, FolderOpen, FileCode, Save, Smartphone, Tablet, Monitor,
   Github, Loader2, CheckCircle2, AlertCircle, Undo2, Redo2,
   Eye, MessageCircle, MoreVertical, ArrowRight, Square, Trash2,
+  Copy,
 } from "lucide-react";
 import {
   ResizableHandle,
@@ -562,9 +563,21 @@ export default function BuilderPage() {
             <div className="flex flex-col h-full">
               <div className="flex-shrink-0 border-b border-border p-2 flex items-center gap-2 overflow-x-auto">
                 {vfs.files.map((file) => (
-                  <button key={file.name} onClick={() => setActiveFile(file.name)} className={`px-3 py-1 rounded-md text-xs font-medium ${activeFile === file.name ? "bg-primary/15 text-primary" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}>
-                    {file.name}
-                  </button>
+                  <div key={file.name} className="flex items-center gap-1">
+                    <button onClick={() => setActiveFile(file.name)} className={`px-3 py-1 rounded-md text-xs font-medium ${activeFile === file.name ? "bg-primary/15 text-primary" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}`}>
+                      {file.name}
+                    </button>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(file.content);
+                        toast.success(`تم نسخ ${file.name} 📋`);
+                      }}
+                      className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                      title={`نسخ ${file.name}`}
+                    >
+                      <Copy className="h-3 w-3" />
+                    </button>
+                  </div>
                 ))}
               </div>
               <div className="flex-1 overflow-auto p-4 font-mono text-sm bg-muted text-muted-foreground">
