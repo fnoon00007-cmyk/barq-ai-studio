@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowRight, FlaskConical, FileCode2, BarChart3, Code2,
   ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, XCircle,
-  Sparkles, Lightbulb, Loader2, Bug
+  Sparkles, Lightbulb, Loader2, Bug, Timer
 } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { validateCodeQuality, type CodeQualityReport, type VFSFile } from "@/lib/code-validator";
@@ -200,7 +200,40 @@ export default function TestQualityPage() {
   const [currentPhaseNum, setCurrentPhaseNum] = useState(0);
   const [completedPhases, setCompletedPhases] = useState<number[]>([]);
 
-  // Real build + analyze (4-phase)
+  // Timer state
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [totalBuildTime, setTotalBuildTime] = useState<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Timer effect
+  useEffect(() => {
+    if (isBuilding || isAnalyzing) {
+      setElapsedSeconds(0);
+      setTotalBuildTime(null);
+      timerRef.current = setInterval(() => {
+        setElapsedSeconds(prev => prev + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (elapsedSeconds > 0 && !isBuilding && !isAnalyzing) {
+        setTotalBuildTime(elapsedSeconds);
+      }
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isBuilding, isAnalyzing]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return mins > 0 ? `${mins}:${secs.toString().padStart(2, "0")}` : `${secs} ثانية`;
+  };
+
+  // Real build + analyze — uses same pipeline as useBuildEngine (4-phase)
   const handleTest = async () => {
     if (!prompt.trim()) {
       toast.error("الرجاء كتابة طلب البناء");
@@ -223,8 +256,8 @@ export default function TestQualityPage() {
         return;
       }
 
-      // Phase 1: Planning
-      let buildPrompt = "";
+      // ─── Phase 1: Planning (same as useBuildEngine.handleSendMessage) ───
+      let buildPromptResult = "";
       let dependencyGraph: any = null;
 
       await streamBarqPlanner(
@@ -232,7 +265,7 @@ export default function TestQualityPage() {
         {
           onThinkingStep: (step) => setBuildPhase("🧠 " + step),
           onBuildReady: (bp, _summary, _name, dg) => {
-            buildPrompt = bp;
+            buildPromptResult = bp;
             dependencyGraph = dg;
           },
           onMessageDelta: () => {},
@@ -241,16 +274,16 @@ export default function TestQualityPage() {
         }
       );
 
-      if (!buildPrompt) {
+      if (!buildPromptResult) {
         toast.info("المخطط يحتاج مزيد من التفاصيل — حاول وصفاً أطول");
         setIsBuilding(false);
         return;
       }
 
       console.log("=== PLANNER DONE ===");
-      console.log("Build prompt length:", buildPrompt.length);
+      console.log("Build prompt length:", buildPromptResult.length);
 
-      // Phase 2: Multi-phase Building (4 phases)
+      // ─── Phase 2: Multi-phase Building (same as useBuildEngine.handleStartBuild) ───
       const allCollectedFiles: VFSFile[] = [];
 
       for (let phaseNum = 1; phaseNum <= BUILD_PHASES.length; phaseNum++) {
@@ -260,6 +293,7 @@ export default function TestQualityPage() {
 
         console.log(`=== PHASE ${phaseNum}: ${phase.label} ===`);
 
+        // Same context passing as useBuildEngine — send previous phases' files
         const existingFromPrev = allCollectedFiles.map(f => ({
           path: f.name,
           content: f.content,
@@ -270,7 +304,7 @@ export default function TestQualityPage() {
 
         await streamBarqBuilder(
           {
-            buildPrompt,
+            buildPrompt: buildPromptResult,
             projectId: null,
             dependencyGraph,
             existingFiles: existingFromPrev,
@@ -311,7 +345,7 @@ export default function TestQualityPage() {
         toast.warning(`تحذير: ${emptyFiles.length} ملف فارغ أو قصير جداً`);
       }
 
-      // Phase 3: Analyze
+      // ─── Phase 3: Analyze ───
       setIsBuilding(false);
       setIsAnalyzing(true);
       setBuildPhase("🔍 جاري تحليل الجودة...");
@@ -435,16 +469,30 @@ export default function TestQualityPage() {
             <div className="text-xs text-muted-foreground mt-1.5 text-left">{prompt.length} حرف</div>
           </div>
 
-          {/* Phase progress bar */}
+          {/* Phase progress bar + Timer */}
           {isBuilding && currentPhaseNum > 0 && (
             <PhaseProgressBar currentPhase={currentPhaseNum} completedPhases={completedPhases} />
           )}
 
-          {/* Build phase indicator */}
-          {buildPhase && (
-            <div className="mb-4 flex items-center gap-2 text-sm text-primary font-medium animate-pulse">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {buildPhase}
+          {/* Build timer */}
+          {(isBuilding || isAnalyzing) && (
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm text-primary font-medium animate-pulse">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {buildPhase}
+              </div>
+              <div className="flex items-center gap-1.5 text-sm font-mono text-muted-foreground bg-muted px-3 py-1.5 rounded-lg">
+                <Timer className="h-3.5 w-3.5" />
+                {formatTime(elapsedSeconds)}
+              </div>
+            </div>
+          )}
+
+          {/* Total build time (after completion) */}
+          {totalBuildTime && !isBuilding && !isAnalyzing && (
+            <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
+              <Timer className="h-4 w-4" />
+              مدة البناء الكاملة: <span className="font-bold text-foreground font-mono">{formatTime(totalBuildTime)}</span>
             </div>
           )}
 
@@ -611,6 +659,9 @@ export default function TestQualityPage() {
                   🐛 Debug Info
                 </h2>
                 <div className="space-y-3 text-sm font-mono text-muted-foreground">
+                  {totalBuildTime && (
+                    <div>⏱️ مدة البناء: <span className="text-foreground font-bold">{formatTime(totalBuildTime)}</span></div>
+                  )}
                   <div>عدد الملفات: <span className="text-foreground font-bold">{builtFiles.length}</span></div>
                   <div>إجمالي الأحرف: <span className="text-foreground font-bold">{builtFiles.reduce((s, f) => s + f.content.length, 0).toLocaleString()}</span></div>
                   <div>إجمالي الأسطر: <span className="text-foreground font-bold">{builtFiles.reduce((s, f) => s + f.content.split("\n").length, 0).toLocaleString()}</span></div>
