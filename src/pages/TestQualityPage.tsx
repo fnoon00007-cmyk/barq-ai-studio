@@ -334,20 +334,55 @@ export default function TestQualityPage() {
           toast.error("فشل البناء في المرحلة " + job.current_phase);
           supabase.removeChannel(channel);
         }
-
-        // Show phase completion toast
-        if (phases.length > 0) {
-          const lastPhase = phases[phases.length - 1];
-          const phaseInfo = BUILD_PHASES[lastPhase - 1];
-          if (phaseInfo && curPhase > lastPhase) {
-            // Only toast for newly completed phases
-          }
-        }
       })
       .subscribe();
 
     return channel;
-  }, []);
+  }, [saveTestResult]);
+
+  // ─── Stale build detection: if no update for 5 minutes, mark as failed ───
+  useEffect(() => {
+    if (!isBuilding || !activeJobId) return;
+
+    const staleCheckInterval = setInterval(async () => {
+      try {
+        const { data: job } = await supabase
+          .from("build_jobs")
+          .select("status, updated_at")
+          .eq("id", activeJobId)
+          .single();
+
+        if (!job) return;
+
+        // If completed/failed, sync state
+        if (job.status === "completed" || job.status.startsWith("failed")) {
+          setIsBuilding(false);
+          setBuildPhase("");
+          if (job.status.startsWith("failed")) {
+            toast.error("فشل البناء — السيرفر لم يستجب");
+          }
+          clearInterval(staleCheckInterval);
+          return;
+        }
+
+        // Check staleness: >5 min since last update
+        const lastUpdate = new Date(job.updated_at).getTime();
+        const staleMs = Date.now() - lastUpdate;
+        if (staleMs > 5 * 60 * 1000) {
+          console.warn("[stale] Build stuck for", Math.round(staleMs / 1000), "seconds");
+          await supabase.from("build_jobs").update({ status: `failed_phase_${currentPhaseNum || 4}` }).eq("id", activeJobId);
+          setIsBuilding(false);
+          setBuildPhase("");
+          toast.error("⏰ البناء تجاوز المدة المسموحة — حاول مرة ثانية");
+          clearInterval(staleCheckInterval);
+        }
+      } catch (err) {
+        console.warn("[stale-check] Error:", err);
+      }
+    }, 30_000); // Check every 30 seconds
+
+    return () => clearInterval(staleCheckInterval);
+  }, [isBuilding, activeJobId, currentPhaseNum]);
 
   // ─── Check for active/incomplete builds on mount ───
   useEffect(() => {
