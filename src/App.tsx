@@ -18,6 +18,7 @@ const PricingPage = lazy(() => import("./pages/PricingPage"));
 const ProjectDashboardPage = lazy(() => import("./pages/ProjectDashboardPage"));
 const PrivacyPage = lazy(() => import("./pages/PrivacyPage"));
 const TermsPage = lazy(() => import("./pages/TermsPage"));
+const TemplatesPage = lazy(() => import("./pages/TemplatesPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient({
@@ -67,6 +68,7 @@ const App = () => (
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />
+            <Route path="/templates" element={<TemplatesPage />} />
             
             {/* Protected routes */}
             <Route element={<AuthGuard />}>
