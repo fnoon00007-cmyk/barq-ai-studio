@@ -11,6 +11,8 @@ export interface ThinkingStep {
   status: 'pending' | 'completed' | 'failed' | 'loading';
 }
 
+export type PipelineStage = 'thinking' | 'planning' | 'handoff' | 'building' | 'reviewing' | 'done';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -19,6 +21,8 @@ export interface ChatMessage {
   isStreaming?: boolean;
   thinkingSteps?: ThinkingStep[];
   affectedFiles?: string[];
+  pipelineStage?: PipelineStage;
+  handoffPrompt?: string; // The English prompt sent to the builder
 }
 
 interface UseBuilderChatProps {
