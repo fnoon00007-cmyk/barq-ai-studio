@@ -1,11 +1,19 @@
 
 import { useState, useCallback, useRef, useReducer } from "react";
 import { toast } from "sonner";
-import { streamBarqPlanner, streamBarqBuilder, streamBarqFixer, reviewBuild } from "@/lib/barq-api";
+import { streamBarqPlanner, streamBarqBuilder, streamBarqFixer, reviewBuild, BUILD_PHASES } from "@/lib/barq-api";
 import { VFSFile, VFSOperation } from "./useVFS";
 import { ChatMessage, ThinkingStep } from "./useBuilderChat";
 
 // --- Types and Interfaces ---
+
+interface BuildPhaseProgress {
+  currentPhase: number;
+  totalPhases: number;
+  phaseLabel: string;
+  completedPhases: number[];
+  phaseFiles: Record<number, string[]>;
+}
 
 interface BuildEngineState {
   isThinking: boolean;
@@ -15,14 +23,16 @@ interface BuildEngineState {
   reviewStatus: "reviewing" | "fixing" | "approved" | null;
   fixSuggestion: { operations: VFSOperation[]; summary: string } | null;
   error: string | null;
-  dependencyGraph: any | null; // New: To store the structure planned by Gemini
+  dependencyGraph: any | null;
+  phaseProgress: BuildPhaseProgress | null;
 }
 
 type BuildEngineAction =
   | { type: "SET_STATUS"; payload: { isThinking?: boolean; isBuilding?: boolean; reviewStatus?: BuildEngineState["reviewStatus"]; error?: string | null } }
-      | { type: "SET_BUILD_PROMPT"; payload: { prompt: string | null; projectName?: string | null; dependencyGraph?: any } }
-      | { type: "SET_FIX_SUGGESTION"; payload: { operations: VFSOperation[]; summary: string } | null }
-      | { type: "RESET" };
+  | { type: "SET_BUILD_PROMPT"; payload: { prompt: string | null; projectName?: string | null; dependencyGraph?: any } }
+  | { type: "SET_FIX_SUGGESTION"; payload: { operations: VFSOperation[]; summary: string } | null }
+  | { type: "SET_PHASE_PROGRESS"; payload: BuildPhaseProgress | null }
+  | { type: "RESET" };
 
 interface UseBuildEngineProps {
   userId: string | null;
@@ -46,6 +56,7 @@ const initialState: BuildEngineState = {
   error: null,
   dependencyGraph: null,
   fixSuggestion: null,
+  phaseProgress: null,
 };
 
 const buildEngineReducer = (state: BuildEngineState, action: BuildEngineAction): BuildEngineState => {
@@ -61,6 +72,8 @@ const buildEngineReducer = (state: BuildEngineState, action: BuildEngineAction):
       };
     case "SET_FIX_SUGGESTION":
       return { ...state, fixSuggestion: action.payload };
+    case "SET_PHASE_PROGRESS":
+      return { ...state, phaseProgress: action.payload };
     case "RESET":
       return initialState;
     default:
@@ -225,17 +238,19 @@ export function useBuildEngine({
     dispatch({ type: "SET_STATUS", payload: { isBuilding: true, isThinking: true, error: null } });
     const buildPromptContent = state.buildPrompt;
     const currentDependencyGraph = state.dependencyGraph;
+    const isModification = files.length > 0;
     
     dispatch({ type: "SET_BUILD_PROMPT", payload: { prompt: null } });
 
     const assistantMsgId = crypto.randomUUID();
     const thinkingSteps: ThinkingStep[] = [];
     const affectedFiles: string[] = [];
+    const allFileBuffers = new Map<string, { content: string, action: VFSOperation['action'] }>();
 
     addMessage({
       id: assistantMsgId,
       role: "assistant",
-      content: "جاري تنفيذ خطة البناء...",
+      content: isModification ? "جاري تعديل الموقع..." : "جاري البناء على مراحل... ⚡",
       timestamp: new Date(),
       isStreaming: true,
       thinkingSteps: [],
@@ -245,163 +260,201 @@ export function useBuildEngine({
     });
 
     abortControllerRef.current = new AbortController();
-    
-    const fileBuffers = new Map<string, { content: string, action: VFSOperation['action'] }>();
 
     try {
       const token = await getAuthToken();
       if (!token) throw new Error("Authentication failed");
 
-      await streamBarqBuilder(
-        { 
-          buildPrompt: buildPromptContent,
-          projectId,
-          dependencyGraph: currentDependencyGraph,
-          existingFiles: files.map(f => ({
-            path: f.name,
-            content: f.content,
-            language: f.language || 'tsx',
-          }))
-        },
-        { // Callbacks object is now the second argument
-          onThinkingStep: (step) => {
-            const newStep: ThinkingStep = { id: String(thinkingSteps.length + 1), label: step, status: "completed" };
-            thinkingSteps.push(newStep);
+      if (isModification) {
+        // ─── MODIFICATION MODE: single-pass, no phases ───
+        dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+
+        await streamBarqBuilder(
+          {
+            buildPrompt: buildPromptContent,
+            projectId,
+            dependencyGraph: currentDependencyGraph,
+            existingFiles: files.map(f => ({ path: f.name, content: f.content, language: f.language || 'tsx' })),
+          },
+          {
+            onThinkingStep: (step) => {
+              const newStep: ThinkingStep = { id: String(thinkingSteps.length + 1), label: step, status: "completed" };
+              thinkingSteps.push(newStep);
+              updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
+            },
+            onFileStart: (path, action) => {
+              if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); }
+              allFileBuffers.set(path, { content: "", action: (action as VFSOperation['action']) || 'update' });
+            },
+            onFileChunk: (path, chunk) => {
+              const buf = allFileBuffers.get(path);
+              if (buf) buf.content += chunk;
+              else { allFileBuffers.set(path, { content: chunk, action: 'update' }); if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); } }
+            },
+            onFileDone: (path, content) => {
+              const buf = allFileBuffers.get(path);
+              if (buf) buf.content = content;
+              else { allFileBuffers.set(path, { content, action: 'update' }); if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); } }
+            },
+            onDone: () => {},
+            onError: (error) => { throw new Error(error); },
+          },
+          abortControllerRef.current.signal
+        );
+      } else {
+        // ─── NEW BUILD: multi-phase (4 phases) ───
+        for (let phaseNum = 1; phaseNum <= 4; phaseNum++) {
+          if (abortControllerRef.current?.signal.aborted) break;
+
+          const phase = BUILD_PHASES[phaseNum - 1];
+          
+          dispatch({
+            type: "SET_PHASE_PROGRESS",
+            payload: {
+              currentPhase: phaseNum,
+              totalPhases: 4,
+              phaseLabel: phase.label,
+              completedPhases: Array.from({ length: phaseNum - 1 }, (_, i) => i + 1),
+              phaseFiles: {},
+            },
+          });
+
+          updateMessage(assistantMsgId, {
+            content: `⚡ المرحلة ${phaseNum}/4: ${phase.label} — ${phase.files.join("، ")}`,
+          });
+
+          // Add phase thinking step
+          const phaseStep: ThinkingStep = { id: `phase-${phaseNum}`, label: `المرحلة ${phaseNum}: ${phase.label} (${phase.files.join(", ")})`, status: "loading" };
+          thinkingSteps.push(phaseStep);
+          updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
+
+          // Collect files from previous phases as context for consistency
+          const existingFromPrevPhases = Array.from(allFileBuffers.entries()).map(([path, data]) => ({
+            path,
+            content: data.content,
+            language: path.endsWith(".css") ? "css" : "tsx",
+          }));
+
+          const phaseFileBuffers = new Map<string, { content: string, action: VFSOperation['action'] }>();
+
+          await streamBarqBuilder(
+            {
+              buildPrompt: buildPromptContent,
+              projectId,
+              dependencyGraph: currentDependencyGraph,
+              existingFiles: existingFromPrevPhases,
+              phase: phaseNum,
+            },
+            {
+              onThinkingStep: (step) => {
+                const newStep: ThinkingStep = { id: String(thinkingSteps.length + 1), label: step, status: "completed" };
+                thinkingSteps.push(newStep);
+                updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
+              },
+              onFileStart: (path, action) => {
+                if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); }
+                phaseFileBuffers.set(path, { content: "", action: (action as VFSOperation['action']) || 'create' });
+              },
+              onFileChunk: (path, chunk) => {
+                const buf = phaseFileBuffers.get(path);
+                if (buf) buf.content += chunk;
+                else { phaseFileBuffers.set(path, { content: chunk, action: 'create' }); if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); } }
+              },
+              onFileDone: (path, content) => {
+                const buf = phaseFileBuffers.get(path);
+                if (buf) buf.content = content;
+                else { phaseFileBuffers.set(path, { content, action: 'create' }); if (!affectedFiles.includes(path)) { affectedFiles.push(path); updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] }); } }
+              },
+              onDone: () => {},
+              onError: (error) => { throw new Error(error); },
+            },
+            abortControllerRef.current.signal
+          );
+
+          // Apply this phase's files immediately
+          const phaseOps: VFSOperation[] = Array.from(phaseFileBuffers.entries()).map(([path, data]) => ({
+            path, content: data.content, action: data.action,
+          }));
+
+          if (phaseOps.length > 0) {
+            await applyVFSOperations(phaseOps, `المرحلة ${phaseNum}: ${phase.label}`);
+            // Merge into allFileBuffers
+            for (const [path, data] of phaseFileBuffers) {
+              allFileBuffers.set(path, data);
+            }
+          }
+
+          // Mark phase step as completed
+          const stepIdx = thinkingSteps.findIndex(s => s.id === `phase-${phaseNum}`);
+          if (stepIdx >= 0) {
+            thinkingSteps[stepIdx].status = "completed";
             updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
-          },
-          onFileStart: (path, action) => {
-            if (!affectedFiles.includes(path)) {
-              affectedFiles.push(path);
-              updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
-            }
-            fileBuffers.set(path, { content: "", action: (action as VFSOperation['action']) || 'create' });
-          },
-          onFileChunk: (path, chunk) => {
-            const buffer = fileBuffers.get(path);
-            if (buffer) {
-              buffer.content += chunk;
+          }
+
+          toast.success(`المرحلة ${phaseNum}/4 اكتملت: ${phase.label} ⚡`);
+        }
+      }
+
+      // All phases done — finalize
+      const finalOps: VFSOperation[] = Array.from(allFileBuffers.entries()).map(([path, data]) => ({
+        path, content: data.content, action: data.action,
+      }));
+
+      dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+      updateMessage(assistantMsgId, { content: "اكتمل البناء! جارٍ المراجعة التلقائية... 🔍", isStreaming: false, pipelineStage: "reviewing" });
+      await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
+      await saveProject();
+
+      // --- Auto Review Phase ---
+      if (finalOps.length > 0 && buildPromptContent) {
+        dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
+        try {
+          const reviewFiles = finalOps.map(op => ({
+            path: op.path, content: op.content || "", language: op.path.endsWith(".css") ? "css" : "tsx",
+          }));
+          const reviewResult = await reviewBuild(buildPromptContent, reviewFiles);
+
+          if (reviewResult.status === "approved") {
+            fixAttemptsRef.current = 0;
+            dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
+            const reviewMsgId = crypto.randomUUID();
+            addMessage({ id: reviewMsgId, role: "assistant", content: `✅ ${reviewResult.summary_ar}`, timestamp: new Date(), pipelineStage: "done" });
+            await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
+            setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
+          } else if (reviewResult.status === "needs_fix" && reviewResult.fix_prompt) {
+            if (fixAttemptsRef.current >= MAX_FIX_ATTEMPTS) {
+              fixAttemptsRef.current = 0;
+              dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+              const issuesSummary = reviewResult.issues.map(i => `• ${i.file}: ${i.issue}`).join("\n");
+              const reviewMsgId = crypto.randomUUID();
+              addMessage({ id: reviewMsgId, role: "assistant", content: `⚠️ المراجعة وجدت مشاكل لم يتم حلها بعد ${MAX_FIX_ATTEMPTS} محاولات:\n${issuesSummary}`, timestamp: new Date(), pipelineStage: "done" });
+              await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
             } else {
-              // Handle case where file_start wasn't received
-              fileBuffers.set(path, { content: chunk, action: 'create' });
-              if (!affectedFiles.includes(path)) {
-                affectedFiles.push(path);
-                updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
-              }
+              fixAttemptsRef.current += 1;
+              dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
+              const issuesSummary = reviewResult.issues.map(i => `• ${i.file}: ${i.issue}`).join("\n");
+              const reviewMsgId = crypto.randomUUID();
+              addMessage({ id: reviewMsgId, role: "assistant", content: `🔧 المراجعة وجدت مشاكل (محاولة ${fixAttemptsRef.current}/${MAX_FIX_ATTEMPTS}):\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`, timestamp: new Date() });
+              await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+              handleSendMessage(reviewResult.fix_prompt, true);
             }
-          },
-          onFileDone: (path, content) => {
-            // file_done carries the full content - use it as the final source of truth
-            const existing = fileBuffers.get(path);
-            if (existing) {
-              existing.content = content;
-            } else {
-              fileBuffers.set(path, { content, action: 'create' });
-              if (!affectedFiles.includes(path)) {
-                affectedFiles.push(path);
-                updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
-              }
-            }
-          },
-          onDone: async () => {
-            const finalOps: VFSOperation[] = Array.from(fileBuffers.entries()).map(([path, data]) => ({
-              path,
-              content: data.content,
-              action: data.action
-            }));
-
-            if (finalOps.length > 0) {
-              await applyVFSOperations(finalOps, "AI build update");
-              toast.success("تم تحديث النظام بنجاح! ⚡");
-            }
-            
-            updateMessage(assistantMsgId, { content: "اكتمل البناء! جارٍ المراجعة التلقائية... 🔍", isStreaming: false, pipelineStage: "reviewing" });
-            await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
-            await saveProject();
-
-            // --- Auto Review Phase (with attempt limit) ---
-            if (finalOps.length > 0 && buildPromptContent) {
-              dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
-              try {
-                const reviewFiles = finalOps.map(op => ({
-                  path: op.path,
-                  content: op.content || "",
-                  language: op.path.endsWith(".css") ? "css" : "tsx",
-                }));
-
-                const reviewResult = await reviewBuild(buildPromptContent, reviewFiles);
-
-                if (reviewResult.status === "approved") {
-                  fixAttemptsRef.current = 0; // Reset on success
-                  dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
-                  const reviewMsgId = crypto.randomUUID();
-                  addMessage({
-                    id: reviewMsgId,
-                    role: "assistant",
-                    content: `✅ ${reviewResult.summary_ar}`,
-                    timestamp: new Date(),
-                    pipelineStage: "done",
-                  });
-                  await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
-                  setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
-                } else if (reviewResult.status === "needs_fix" && reviewResult.fix_prompt) {
-                  if (fixAttemptsRef.current >= MAX_FIX_ATTEMPTS) {
-                    // Stop the loop — max attempts reached
-                    fixAttemptsRef.current = 0;
-                    dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
-                    const issuesSummary = reviewResult.issues
-                      .map(i => `• ${i.file}: ${i.issue}`)
-                      .join("\n");
-                    const reviewMsgId = crypto.randomUUID();
-                    addMessage({
-                      id: reviewMsgId,
-                      role: "assistant",
-                      content: `⚠️ المراجعة وجدت مشاكل لم يتم حلها بعد ${MAX_FIX_ATTEMPTS} محاولات:\n${issuesSummary}\n\nيمكنك محاولة إصلاحها يدوياً أو إرسال طلب تعديل جديد.`,
-                      timestamp: new Date(),
-                      pipelineStage: "done",
-                    });
-                    await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
-                  } else {
-                    fixAttemptsRef.current += 1;
-                    dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
-                    const issuesSummary = reviewResult.issues
-                      .map(i => `• ${i.file}: ${i.issue}`)
-                      .join("\n");
-                    const reviewMsgId = crypto.randomUUID();
-                    addMessage({
-                      id: reviewMsgId,
-                      role: "assistant",
-                      content: `🔧 المراجعة وجدت مشاكل (محاولة ${fixAttemptsRef.current}/${MAX_FIX_ATTEMPTS}):\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`,
-                      timestamp: new Date(),
-                    });
-                    await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
-                    handleSendMessage(reviewResult.fix_prompt, true);
-                  }
-                } else {
-                  dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
-                }
-              } catch (reviewErr: any) {
-                console.warn("Auto-review failed (non-blocking):", reviewErr.message);
-                dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
-              }
-            }
-          },
-          onError: (error) => {
-            throw new Error(error);
-          },
-        },
-        abortControllerRef.current.signal
-      );
+          } else {
+            dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+          }
+        } catch (reviewErr: any) {
+          console.warn("Auto-review failed (non-blocking):", reviewErr.message);
+          dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+        }
+      }
 
     } catch (err: any) {
       const isAbort = err.name === "AbortError";
       const errorMessage = isAbort ? "تم إيقاف عملية البناء." : err.message || "حدث خطأ أثناء البناء.";
       updateMessage(assistantMsgId, { content: errorMessage, isStreaming: false });
       dispatch({ type: "SET_STATUS", payload: { error: errorMessage } });
-      if (isAbort) {
-        toast.warning("تم إيقاف البناء.");
-      } else {
-        toast.error(`فشل البناء: ${errorMessage}`);
-      }
+      dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
+      if (isAbort) toast.warning("تم إيقاف البناء.");
+      else toast.error(`فشل البناء: ${errorMessage}`);
       saveMessage({ role: "assistant", content: errorMessage });
     } finally {
       dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false } });

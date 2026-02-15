@@ -209,9 +209,9 @@ export async function streamBarqPlanner(
   await processSSEStream(resp, callbacks, signal);
 }
 
-/** Stream build execution with Groq builder */
+/** Stream build execution with Groq builder — supports phased builds */
 export async function streamBarqBuilder(
-  payload: { buildPrompt: string; projectId: string | null; dependencyGraph: any; existingFiles: { path: string; content: string }[] },
+  payload: { buildPrompt: string; projectId: string | null; dependencyGraph: any; existingFiles: { path: string; content: string }[]; phase?: number },
   callbacks: StreamCallbacks,
   signal?: AbortSignal
 ): Promise<void> {
@@ -225,6 +225,11 @@ export async function streamBarqBuilder(
     existing_files: payload.existingFiles,
   };
 
+  // Add phase number if specified (for phased builds)
+  if (payload.phase) {
+    body.phase = payload.phase;
+  }
+
   const resp = await fetchWithRetry(url, {
     method: "POST",
     headers,
@@ -234,6 +239,14 @@ export async function streamBarqBuilder(
 
   await processSSEStream(resp, callbacks, signal);
 }
+
+/** Build phases definition for UI progress */
+export const BUILD_PHASES = [
+  { id: 1, label: "الأساس", files: ["styles.css", "App.tsx", "Header.tsx"] },
+  { id: 2, label: "المحتوى الرئيسي", files: ["Hero.tsx", "Services.tsx", "About.tsx"] },
+  { id: 3, label: "التفاعل", files: ["Stats.tsx", "Testimonials.tsx", "CTA.tsx"] },
+  { id: 4, label: "الإغلاق", files: ["Contact.tsx", "Footer.tsx"] },
+];
 
 /** Review generated files with Gemini reviewer */
 export interface ReviewResult {
