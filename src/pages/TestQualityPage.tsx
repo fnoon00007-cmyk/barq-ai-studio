@@ -374,8 +374,46 @@ export default function TestQualityPage() {
           </div>
         )}
 
+        {/* Download Report */}
+        {report && (
+          <div className="text-center mt-8">
+            <button
+              onClick={() => {
+                const lines = [
+                  `── تقرير جودة الكود ──`,
+                  `التاريخ: ${new Date().toLocaleDateString("ar-SA")}`,
+                  `النتيجة: ${report.score}/100 (${report.passed ? "مقبول ✅" : "مرفوض ❌"})`,
+                  ``,
+                  `── تفصيل النقاط ──`,
+                  `حجم الكود: ${report.breakdown.codeSize}/20`,
+                  `ثراء Tailwind: ${report.breakdown.tailwindRichness}/20`,
+                  `محتوى عربي: ${report.breakdown.arabicContent}/20`,
+                  `التفاعلية: ${report.breakdown.interactivity}/20`,
+                  `الاكتمال: ${report.breakdown.completeness}/20`,
+                  ``,
+                  `── الملفات (${report.files.length}) ──`,
+                  ...report.files.map(f => `${f.grade} | ${f.name} | ${f.lines} سطر | عربي ${Math.round(f.arabicRatio * 100)}%`),
+                  ``,
+                  ...(report.issues.length ? [`── مشاكل ──`, ...report.issues] : []),
+                  ...(report.suggestions.length ? [`── اقتراحات ──`, ...report.suggestions] : []),
+                ];
+                const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `quality-report-${report.score}.txt`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              }}
+              className="inline-flex items-center gap-3 px-8 py-4 bg-card border border-border rounded-2xl font-bold text-foreground hover:bg-muted transition-all duration-300 hover:-translate-y-1 shadow-sm"
+            >
+              <ArrowRight className="h-5 w-5 rotate-90" />
+              📥 تحميل التقرير
+            </button>
+          </div>
+        )}
+
         {/* Back link */}
-        <div className="text-center mt-12">
+        <div className="text-center mt-6">
           <button
             onClick={() => navigate("/")}
             className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground text-sm transition-colors"
