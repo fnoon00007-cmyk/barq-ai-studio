@@ -47,6 +47,63 @@ export type Database = {
         }
         Relationships: []
       }
+      build_jobs: {
+        Row: {
+          build_prompt: string | null
+          completed_at: string | null
+          current_phase: number
+          dependency_graph: Json | null
+          id: string
+          phase_1_files: Json | null
+          phase_2_files: Json | null
+          phase_3_files: Json | null
+          phase_4_files: Json | null
+          prompt: string
+          quality_report: Json | null
+          quality_score: number | null
+          started_at: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          build_prompt?: string | null
+          completed_at?: string | null
+          current_phase?: number
+          dependency_graph?: Json | null
+          id?: string
+          phase_1_files?: Json | null
+          phase_2_files?: Json | null
+          phase_3_files?: Json | null
+          phase_4_files?: Json | null
+          prompt: string
+          quality_report?: Json | null
+          quality_score?: number | null
+          started_at?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          build_prompt?: string | null
+          completed_at?: string | null
+          current_phase?: number
+          dependency_graph?: Json | null
+          id?: string
+          phase_1_files?: Json | null
+          phase_2_files?: Json | null
+          phase_3_files?: Json | null
+          phase_4_files?: Json | null
+          prompt?: string
+          quality_report?: Json | null
+          quality_score?: number | null
+          started_at?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       chat_messages: {
         Row: {
           content: string
