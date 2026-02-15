@@ -6,11 +6,20 @@ import { Badge } from "@/components/ui/badge";
 import {
   BarChart3, TrendingUp, Clock, FileCode2,
   Filter, ChevronDown, ChevronUp, AlertCircle,
-  CheckCircle2, Zap, Loader2
+  CheckCircle2, Zap, Loader2, Download, Copy
 } from "lucide-react";
 import { format } from "date-fns";
 import { ar } from "date-fns/locale";
 import { toast } from "sonner";
+import JSZip from "jszip";
+
+interface FileData {
+  name: string;
+  content: string;
+  lines: number;
+  language: string;
+  grade: string;
+}
 
 interface AnalyticsEntry {
   id: string;
@@ -28,6 +37,7 @@ interface AnalyticsEntry {
   total_lines: number;
   avg_lines_per_file: number;
   files_summary: Array<{ name: string; lines: number; grade: string }>;
+  files_data: FileData[];
   phase_times: Record<string, number> | null;
   model_used: string | null;
   validation_retries: number | null;
@@ -89,6 +99,71 @@ export default function AdminQualityLabPage() {
 
   useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
 
+  // --- Download ZIP ---
+  const downloadFiles = useCallback(async (entry: AnalyticsEntry) => {
+    const filesData = entry.files_data;
+    if (!filesData || !Array.isArray(filesData) || filesData.length === 0) {
+      toast.error("لا توجد ملفات للتحميل");
+      return;
+    }
+
+    try {
+      const zip = new JSZip();
+
+      filesData.forEach((file) => {
+        zip.file(file.name, file.content || "");
+      });
+
+      // Add README
+      const readme = `# Build Analytics Report
+
+**Build ID:** ${entry.id}
+**Created:** ${format(new Date(entry.created_at), "dd MMM yyyy, HH:mm", { locale: ar })}
+
+## Quality Score: ${entry.quality_score}/100
+
+### Breakdown:
+- Code Size: ${entry.code_size_score}/20
+- Tailwind: ${entry.tailwind_score}/20
+- Arabic: ${entry.arabic_score}/20
+- Interactivity: ${entry.interactivity_score}/20
+- Completeness: ${entry.completeness_score}/20
+
+### Build Info:
+- Build Time: ${Math.floor(entry.build_time_seconds / 60)}m ${entry.build_time_seconds % 60}s
+- Files Count: ${entry.files_count}
+- Total Lines: ${entry.total_lines}
+
+### Prompt:
+\`\`\`
+${entry.prompt}
+\`\`\`
+
+### Issues:
+${entry.issues?.map(i => `- ${i}`).join("\n") || "None"}
+
+### Suggestions:
+${entry.suggestions?.map(s => `- ${s}`).join("\n") || "None"}
+`;
+      zip.file("README.md", readme);
+
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `barq-build-${entry.id.slice(0, 8)}-${entry.quality_score}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast.success("تم تحميل الملفات بنجاح! 📦");
+    } catch (err) {
+      console.error("Download failed:", err);
+      toast.error("فشل التحميل");
+    }
+  }, []);
+
   const stats = {
     total: entries.length,
     avgScore: entries.length ? Math.round(entries.reduce((s, e) => s + e.quality_score, 0) / entries.length) : 0,
@@ -123,7 +198,7 @@ export default function AdminQualityLabPage() {
           </div>
           <button
             onClick={() => navigate("/projects")}
-            className="text-sm px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors"
+            className="text-sm px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors text-foreground"
           >
             العودة للمشاريع
           </button>
@@ -133,53 +208,24 @@ export default function AdminQualityLabPage() {
       <div className="container mx-auto px-4 py-8 space-y-8">
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">إجمالي البناءات</p>
-                  <p className="text-3xl font-bold text-foreground">{stats.total}</p>
+          {[
+            { label: "إجمالي البناءات", value: stats.total, suffix: "", icon: FileCode2 },
+            { label: "متوسط الجودة", value: stats.avgScore, suffix: "/100", icon: TrendingUp },
+            { label: "متوسط الوقت", value: `${Math.floor(stats.avgTime / 60)}`, suffix: "د", icon: Clock },
+            { label: "نسبة النجاح", value: stats.passRate, suffix: "%", icon: Zap },
+          ].map(({ label, value, suffix, icon: Icon }) => (
+            <Card key={label}>
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{label}</p>
+                    <p className="text-3xl font-bold text-foreground">{value}<span className="text-lg text-muted-foreground">{suffix}</span></p>
+                  </div>
+                  <Icon className="h-10 w-10 text-primary opacity-20" />
                 </div>
-                <FileCode2 className="h-10 w-10 text-primary opacity-20" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">متوسط الجودة</p>
-                  <p className="text-3xl font-bold text-foreground">{stats.avgScore}<span className="text-lg text-muted-foreground">/100</span></p>
-                </div>
-                <TrendingUp className="h-10 w-10 text-primary opacity-20" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">متوسط الوقت</p>
-                  <p className="text-3xl font-bold text-foreground">{Math.floor(stats.avgTime / 60)}<span className="text-lg text-muted-foreground">د</span></p>
-                </div>
-                <Clock className="h-10 w-10 text-primary opacity-20" />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">نسبة النجاح</p>
-                  <p className="text-3xl font-bold text-foreground">{stats.passRate}<span className="text-lg text-muted-foreground">%</span></p>
-                </div>
-                <Zap className="h-10 w-10 text-primary opacity-20" />
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
         {/* Filters */}
@@ -266,21 +312,47 @@ export default function AdminQualityLabPage() {
                         <p className="text-sm font-medium text-foreground line-clamp-1">{entry.prompt}</p>
                       </div>
 
-                      <button
-                        onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-                        className="p-2 hover:bg-muted rounded-lg transition-colors"
-                      >
-                        {expandedId === entry.id ? (
-                          <ChevronUp className="h-5 w-5 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                      <div className="flex items-center gap-1">
+                        {/* Quick download */}
+                        {Array.isArray(entry.files_data) && entry.files_data.length > 0 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); downloadFiles(entry); }}
+                            className="p-2 hover:bg-muted rounded-lg transition-colors"
+                            title="تحميل الملفات"
+                          >
+                            <Download className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                          </button>
                         )}
-                      </button>
+                        <button
+                          onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                          className="p-2 hover:bg-muted rounded-lg transition-colors"
+                        >
+                          {expandedId === entry.id ? (
+                            <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                          )}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Expanded Details */}
                     {expandedId === entry.id && (
                       <div className="mt-4 pt-4 border-t border-border space-y-4">
+                        {/* Download button */}
+                        {Array.isArray(entry.files_data) && entry.files_data.length > 0 && (
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium text-foreground">تفاصيل البناء:</p>
+                            <button
+                              onClick={() => downloadFiles(entry)}
+                              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                            >
+                              <Download className="h-4 w-4" />
+                              تحميل كل الملفات (.zip)
+                            </button>
+                          </div>
+                        )}
+
                         {/* Scores Breakdown */}
                         <div className="grid grid-cols-5 gap-3">
                           {[
@@ -297,10 +369,44 @@ export default function AdminQualityLabPage() {
                           ))}
                         </div>
 
-                        {/* Files Summary */}
-                        {Array.isArray(entry.files_summary) && entry.files_summary.length > 0 && (
+                        {/* Files with code preview */}
+                        {Array.isArray(entry.files_data) && entry.files_data.length > 0 ? (
                           <div>
-                            <p className="text-sm font-medium text-foreground mb-2">الملفات:</p>
+                            <p className="text-sm font-medium text-foreground mb-2">الملفات ({entry.files_data.length}):</p>
+                            <div className="space-y-2">
+                              {entry.files_data.map((file, i) => (
+                                <details key={i} className="group">
+                                  <summary className="flex items-center justify-between p-3 bg-muted/50 rounded-lg cursor-pointer hover:bg-muted transition-colors">
+                                    <span className="flex items-center gap-2 text-foreground">
+                                      <FileCode2 className="h-4 w-4 text-muted-foreground" />
+                                      <span className="font-mono text-sm">{file.name}</span>
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {file.lines} سطر — Grade {file.grade}
+                                    </span>
+                                  </summary>
+                                  <div className="mt-2 p-4 bg-muted/30 rounded-lg border border-border">
+                                    <pre className="text-xs overflow-x-auto max-h-64 text-foreground font-mono whitespace-pre-wrap">
+                                      <code>{file.content}</code>
+                                    </pre>
+                                    <button
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(file.content);
+                                        toast.success(`نُسخ ${file.name}`);
+                                      }}
+                                      className="mt-2 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground"
+                                    >
+                                      <Copy className="h-3 w-3" />
+                                      نسخ الكود
+                                    </button>
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                          </div>
+                        ) : Array.isArray(entry.files_summary) && entry.files_summary.length > 0 ? (
+                          <div>
+                            <p className="text-sm font-medium text-foreground mb-2">الملفات (metadata فقط):</p>
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                               {entry.files_summary.map((file, i) => (
                                 <div key={i} className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs text-foreground">
@@ -310,7 +416,7 @@ export default function AdminQualityLabPage() {
                               ))}
                             </div>
                           </div>
-                        )}
+                        ) : null}
 
                         {/* Issues */}
                         {Array.isArray(entry.issues) && entry.issues.length > 0 && (
