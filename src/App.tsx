@@ -21,6 +21,7 @@ const TermsPage = lazy(() => import("./pages/TermsPage"));
 const TemplatesPage = lazy(() => import("./pages/TemplatesPage"));
 const PublicPreviewPage = lazy(() => import("./pages/PublicPreviewPage"));
 const TestQualityPage = lazy(() => import("./pages/TestQualityPage"));
+const AdminQualityLabPage = lazy(() => import("./pages/AdminQualityLabPage"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient({
@@ -82,6 +83,7 @@ const App = () => (
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/project/:projectId" element={<ProjectDashboardPage />} />
               <Route path="/settings" element={<BrandSettingsPage />} />
+              <Route path="/admin/quality-lab" element={<AdminQualityLabPage />} />
             </Route>
 
             <Route path="*" element={<NotFound />} />

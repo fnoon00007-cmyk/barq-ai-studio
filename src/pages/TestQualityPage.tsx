@@ -533,7 +533,7 @@ export default function TestQualityPage() {
           setIsAnalyzing(true);
           setBuildPhase("🔍 جاري تحليل الجودة...");
 
-          setTimeout(() => {
+          setTimeout(async () => {
             const result = validateCodeQuality(files);
             setReport(result);
             setIsAnalyzing(false);
@@ -548,6 +548,37 @@ export default function TestQualityPage() {
               quality_score: result.score,
               quality_report: result as any,
             }).eq("id", jobId);
+
+            // Save to build_analytics
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user) {
+                const totalLines = result.files.reduce((s, f) => s + f.lines, 0);
+                await supabase.from("build_analytics" as any).insert({
+                  user_id: user.id,
+                  project_id: null,
+                  prompt: (job.prompt || "").slice(0, 500),
+                  build_time_seconds: buildTime || 0,
+                  quality_score: result.score,
+                  code_size_score: result.breakdown.codeSize,
+                  tailwind_score: result.breakdown.tailwindRichness,
+                  arabic_score: result.breakdown.arabicContent,
+                  interactivity_score: result.breakdown.interactivity,
+                  completeness_score: result.breakdown.completeness,
+                  files_count: result.files.length,
+                  total_lines: totalLines,
+                  avg_lines_per_file: result.files.length > 0 ? Math.round(totalLines / result.files.length) : 0,
+                  files_summary: result.files.map(f => ({ name: f.name, lines: f.lines, grade: f.grade })),
+                  model_used: "gemini",
+                  validation_retries: 0,
+                  issues: result.issues,
+                  suggestions: result.suggestions,
+                });
+                console.log("✅ Analytics saved");
+              }
+            } catch (err) {
+              console.warn("Failed to save analytics:", err);
+            }
           }, 600);
 
           supabase.removeChannel(channel);
