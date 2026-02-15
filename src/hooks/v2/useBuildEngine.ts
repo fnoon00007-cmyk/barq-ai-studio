@@ -130,6 +130,7 @@ export function useBuildEngine({
   const abortControllerRef = useRef<AbortController | null>(null);
   const fixAttemptsRef = useRef<number>(0);
   const realtimeChannelRef = useRef<any>(null);
+  const connectedJobIdRef = useRef<string | null>(null);
   const MAX_FIX_ATTEMPTS = 2;
 
   // --- Cleanup realtime on unmount ---
@@ -221,6 +222,7 @@ export function useBuildEngine({
 
           dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
           dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false, activeJobId: null, serverSideBuild: false } });
+          connectedJobIdRef.current = null;
           updateMessage(assistantMsgId, { content: "اكتمل البناء! ✅", isStreaming: false, pipelineStage: "done" });
           await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
           await saveProject();
@@ -261,6 +263,7 @@ export function useBuildEngine({
         // Build failed
         if (job.status?.startsWith("failed")) {
           dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false, activeJobId: null, serverSideBuild: false, error: "فشل البناء في المرحلة " + job.current_phase } });
+          connectedJobIdRef.current = null;
           dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
           updateMessage(assistantMsgId, { content: "فشل البناء ❌", isStreaming: false });
           toast.error("فشل البناء في المرحلة " + job.current_phase);
@@ -291,6 +294,11 @@ export function useBuildEngine({
 
         if (activeJobs && activeJobs.length > 0) {
           const job = activeJobs[0];
+          
+          // Prevent duplicate reconnections to the same job
+          if (connectedJobIdRef.current === job.id) return;
+          connectedJobIdRef.current = job.id;
+          
           dispatch({ type: "SET_STATUS", payload: { isBuilding: true, isThinking: true, activeJobId: job.id, serverSideBuild: true } });
           
           const curPhase = getCurrentPhaseFromStatus(job.status);
