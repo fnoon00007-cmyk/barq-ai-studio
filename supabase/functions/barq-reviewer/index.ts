@@ -68,7 +68,6 @@ serve(async (req) => {
   }
 
   try {
-    // Authenticate user
     const authResult = await authenticateUser(req);
     if (authResult instanceof Response) return authResult;
 
@@ -79,7 +78,18 @@ serve(async (req) => {
       Deno.env.get("GEMINI_API_KEY"),
       Deno.env.get("GEMINI_API_KEY_2"),
     ].filter(Boolean) as string[];
-    if (geminiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
+
+    const groqKeys = [
+      Deno.env.get("GROQ_API_KEY"),
+      Deno.env.get("GROQ_API_KEY_2"),
+      Deno.env.get("GROQ_API_KEY_3"),
+    ].filter(Boolean) as string[];
+
+    const lovableKey = Deno.env.get("LOVABLE_API_KEY");
+
+    if (geminiKeys.length === 0 && groqKeys.length === 0 && !lovableKey) {
+      throw new Error("No AI API keys configured");
+    }
 
     const fileSummary = files.map((f: any) => 
       `--- ${f.path} (${f.language}) ---\n${f.content.slice(0, 2000)}${f.content.length > 2000 ? "\n...(truncated)" : ""}`
@@ -87,148 +97,89 @@ serve(async (req) => {
 
     const reviewPrompt = `## Original Build Prompt:\n${build_prompt}\n\n## Generated Files (${files.length} files):\n${fileSummary}\n\nReview these files and determine if the website is complete and correct.`;
 
-    const requestBody = JSON.stringify({
-      model: "gemini-2.5-flash",
-      messages: [
-        { role: "system", content: REVIEWER_SYSTEM_PROMPT },
-        { role: "user", content: reviewPrompt },
-      ],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "review_result",
-            description: "Submit the review result",
-            parameters: {
-              type: "object",
-              properties: {
-                status: {
-                  type: "string",
-                  enum: ["approved", "needs_fix"],
-                },
-                summary_ar: {
-                  type: "string",
-                  description: "ملخص المراجعة بالعربي للمستخدم",
-                },
-                issues: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      file: { type: "string" },
-                      issue: { type: "string" },
-                      fix_instruction: { type: "string" },
-                    },
-                    required: ["file", "issue", "fix_instruction"],
+    const messages = [
+      { role: "system", content: REVIEWER_SYSTEM_PROMPT },
+      { role: "user", content: reviewPrompt },
+    ];
+
+    const toolsDef = [
+      {
+        type: "function",
+        function: {
+          name: "review_result",
+          description: "Submit the review result",
+          parameters: {
+            type: "object",
+            properties: {
+              status: { type: "string", enum: ["approved", "needs_fix"] },
+              summary_ar: { type: "string", description: "ملخص المراجعة بالعربي للمستخدم" },
+              issues: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    file: { type: "string" },
+                    issue: { type: "string" },
+                    fix_instruction: { type: "string" },
                   },
-                },
-                fix_prompt: {
-                  type: "string",
-                  description: "A combined English prompt for the builder to fix all issues. Only if status is needs_fix.",
+                  required: ["file", "issue", "fix_instruction"],
                 },
               },
-              required: ["status", "summary_ar", "issues"],
+              fix_prompt: { type: "string", description: "A combined English prompt for the builder to fix all issues. Only if status is needs_fix." },
             },
+            required: ["status", "summary_ar", "issues"],
           },
         },
-      ],
-      tool_choice: { type: "function", function: { name: "review_result" } },
-    });
+      },
+    ];
 
     let response: Response | null = null;
-    let usedGroq = false;
 
-    // Try Gemini keys first
+    // 1. Try Gemini (non-streaming for reviewer)
     for (const key of geminiKeys) {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`,
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-          },
-          body: requestBody,
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "gemini-2.5-flash", messages, tools: toolsDef, tool_choice: { type: "function", function: { name: "review_result" } } }),
         }
       );
-      if (res.ok) {
-        response = res;
-        break;
-      }
-      if (res.status === 429) {
-        console.warn("Gemini reviewer key rate-limited, trying next...");
-        continue;
-      }
+      if (res.ok) { response = res; break; }
+      if (res.status === 429) { console.warn("Gemini reviewer key rate-limited, trying next..."); continue; }
       console.error("Gemini reviewer error:", res.status);
       continue;
     }
 
-    // Fallback to Groq if all Gemini keys failed
+    // 2. Fallback to Groq
     if (!response) {
       console.warn("All Gemini keys exhausted for reviewer, falling back to Groq...");
-      const groqKeys = [
-        Deno.env.get("GROQ_API_KEY"),
-        Deno.env.get("GROQ_API_KEY_2"),
-        Deno.env.get("GROQ_API_KEY_3"),
-      ].filter(Boolean) as string[];
-
-      const groqBody = JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: REVIEWER_SYSTEM_PROMPT },
-          { role: "user", content: reviewPrompt },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "review_result",
-              description: "Submit the review result",
-              parameters: {
-                type: "object",
-                properties: {
-                  status: { type: "string", enum: ["approved", "needs_fix"] },
-                  summary_ar: { type: "string", description: "ملخص المراجعة بالعربي للمستخدم" },
-                  issues: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        file: { type: "string" },
-                        issue: { type: "string" },
-                        fix_instruction: { type: "string" },
-                      },
-                      required: ["file", "issue", "fix_instruction"],
-                    },
-                  },
-                  fix_prompt: { type: "string", description: "A combined English prompt for the builder to fix all issues. Only if status is needs_fix." },
-                },
-                required: ["status", "summary_ar", "issues"],
-              },
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "review_result" } },
-      });
-
       for (const gKey of groqKeys) {
         const gRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: { Authorization: `Bearer ${gKey}`, "Content-Type": "application/json" },
-          body: groqBody,
+          body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, tools: toolsDef, tool_choice: { type: "function", function: { name: "review_result" } } }),
         });
-        if (gRes.ok) {
-          response = gRes;
-          usedGroq = true;
-          console.log("Groq reviewer fallback succeeded");
-          break;
-        }
-        if (gRes.status === 429) {
-          console.warn("Groq reviewer key rate-limited, trying next...");
-          continue;
-        }
+        if (gRes.ok) { response = gRes; console.log("Groq reviewer fallback succeeded"); break; }
+        if (gRes.status === 429) { console.warn("Groq reviewer key rate-limited, trying next..."); continue; }
         console.error("Groq reviewer error:", gRes.status);
         continue;
+      }
+    }
+
+    // 3. Final fallback: Lovable AI Gateway
+    if (!response && lovableKey) {
+      console.warn("All keys exhausted for reviewer, falling back to Lovable AI...");
+      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${lovableKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "google/gemini-2.5-flash", messages, tools: toolsDef, tool_choice: { type: "function", function: { name: "review_result" } } }),
+      });
+      if (res.ok) {
+        response = res;
+        console.log("Lovable AI reviewer fallback succeeded");
+      } else {
+        console.error("Lovable AI reviewer error:", res.status);
       }
     }
 

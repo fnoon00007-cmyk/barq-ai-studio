@@ -145,13 +145,39 @@ async function authenticateUser(req: Request): Promise<{ userId: string } | Resp
   return { userId: user.id };
 }
 
+// Helper to try multiple API keys against an endpoint
+async function tryKeys(
+  keys: string[],
+  url: string,
+  body: string,
+  label: string
+): Promise<Response | null> {
+  for (const key of keys) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body,
+    });
+    if (res.ok) {
+      console.log(`${label} succeeded`);
+      return res;
+    }
+    if (res.status === 429) {
+      console.warn(`${label} rate-limited, trying next...`);
+      continue;
+    }
+    console.error(`${label} error:`, res.status);
+    continue;
+  }
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Authenticate user
     const authResult = await authenticateUser(req);
     if (authResult instanceof Response) return authResult;
 
@@ -166,101 +192,120 @@ serve(async (req) => {
       fullPrompt += `\n\n## EXISTING FILES (modify these, don't rebuild from scratch):\n${filesContext}`;
     }
 
+    const geminiKeys = [
+      Deno.env.get("GEMINI_API_KEY"),
+      Deno.env.get("GEMINI_API_KEY_2"),
+    ].filter(Boolean) as string[];
+
     const groqKeys = [
       Deno.env.get("GROQ_API_KEY"),
       Deno.env.get("GROQ_API_KEY_2"),
       Deno.env.get("GROQ_API_KEY_3"),
     ].filter(Boolean) as string[];
-    if (groqKeys.length === 0) throw new Error("GROQ_API_KEY is not configured");
 
-    const requestBody = JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: BUILDER_SYSTEM_PROMPT },
-        { role: "user", content: fullPrompt },
-      ],
-      stream: true,
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "generate_website",
-            description:
-              "Generate the website files based on the build prompt. Create at least 6 separate files.",
-            parameters: {
-              type: "object",
-              properties: {
-                thought_process: {
-                  type: "array",
-                  items: { type: "string" },
-                  description: "4-6 thinking steps in Arabic describing the build plan",
-                },
-                design_personality: {
-                  type: "string",
-                  enum: ["formal", "creative", "minimalist", "bold"],
-                },
-                vfs_operations: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      path: { type: "string" },
-                      action: { type: "string", enum: ["create", "update"] },
-                      content: { type: "string" },
-                      language: { type: "string", enum: ["tsx", "css", "html"] },
-                    },
-                    required: ["path", "action", "content", "language"],
-                  },
-                },
-                user_message: { type: "string" },
-                css_variables: {
+    const lovableKey = Deno.env.get("LOVABLE_API_KEY");
+
+    const toolsDef = [
+      {
+        type: "function",
+        function: {
+          name: "generate_website",
+          description: "Generate the website files based on the build prompt. Create at least 6 separate files.",
+          parameters: {
+            type: "object",
+            properties: {
+              thought_process: {
+                type: "array",
+                items: { type: "string" },
+                description: "4-6 thinking steps in Arabic describing the build plan",
+              },
+              design_personality: {
+                type: "string",
+                enum: ["formal", "creative", "minimalist", "bold"],
+              },
+              vfs_operations: {
+                type: "array",
+                items: {
                   type: "object",
                   properties: {
-                    primary_color: { type: "string" },
-                    secondary_color: { type: "string" },
-                    border_radius: { type: "string" },
-                    font_style: { type: "string" },
+                    path: { type: "string" },
+                    action: { type: "string", enum: ["create", "update"] },
+                    content: { type: "string" },
+                    language: { type: "string", enum: ["tsx", "css", "html"] },
                   },
+                  required: ["path", "action", "content", "language"],
                 },
               },
-              required: ["thought_process", "design_personality", "vfs_operations", "user_message"],
+              user_message: { type: "string" },
+              css_variables: {
+                type: "object",
+                properties: {
+                  primary_color: { type: "string" },
+                  secondary_color: { type: "string" },
+                  border_radius: { type: "string" },
+                  font_style: { type: "string" },
+                },
+              },
             },
+            required: ["thought_process", "design_personality", "vfs_operations", "user_message"],
           },
         },
-      ],
+      },
+    ];
+
+    const messages = [
+      { role: "system", content: BUILDER_SYSTEM_PROMPT },
+      { role: "user", content: fullPrompt },
+    ];
+
+    const geminiBody = JSON.stringify({
+      model: "gemini-2.5-flash",
+      messages,
+      stream: true,
+      tools: toolsDef,
+      tool_choice: { type: "function", function: { name: "generate_website" } },
+    });
+
+    const groqBody = JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages,
+      stream: true,
+      tools: toolsDef,
       tool_choice: { type: "function", function: { name: "generate_website" } },
     });
 
     let response: Response | null = null;
-    for (const key of groqKeys) {
-      const res = await fetch(
-        "https://api.groq.com/openai/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-          },
-          body: requestBody,
-        }
-      );
+
+    // 1. Try Gemini first
+    response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini builder");
+
+    // 2. Fallback to Groq
+    if (!response) {
+      console.warn("All Gemini keys exhausted for builder, falling back to Groq...");
+      response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq builder");
+    }
+
+    // 3. Final fallback: Lovable AI Gateway
+    if (!response && lovableKey) {
+      console.warn("All Groq keys exhausted for builder, falling back to Lovable AI...");
+      const lovableBody = JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages,
+        stream: true,
+        tools: toolsDef,
+        tool_choice: { type: "function", function: { name: "generate_website" } },
+      });
+      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${lovableKey}`, "Content-Type": "application/json" },
+        body: lovableBody,
+      });
       if (res.ok) {
         response = res;
-        break;
+        console.log("Lovable AI builder fallback succeeded");
+      } else {
+        console.error("Lovable AI builder error:", res.status);
       }
-      if (res.status === 429) {
-        console.warn("Groq key rate-limited, trying fallback...");
-        continue;
-      }
-      const errBody = {
-        error: res.status === 402
-          ? "يرجى إضافة رصيد لحسابك."
-          : "حدث خطأ في الاتصال بالذكاء الاصطناعي",
-      };
-      return new Response(JSON.stringify(errBody), {
-        status: res.status >= 400 && res.status < 500 ? res.status : 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
     }
 
     if (!response) {
