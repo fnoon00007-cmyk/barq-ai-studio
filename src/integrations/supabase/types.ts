@@ -47,6 +47,86 @@ export type Database = {
         }
         Relationships: []
       }
+      build_analytics: {
+        Row: {
+          arabic_score: number
+          avg_lines_per_file: number
+          build_time_seconds: number
+          code_size_score: number
+          completeness_score: number
+          created_at: string
+          files_count: number
+          files_summary: Json
+          id: string
+          interactivity_score: number
+          issues: Json | null
+          model_used: string | null
+          phase_times: Json | null
+          project_id: string | null
+          prompt: string
+          quality_score: number
+          suggestions: Json | null
+          tailwind_score: number
+          total_lines: number
+          user_id: string
+          validation_retries: number | null
+        }
+        Insert: {
+          arabic_score?: number
+          avg_lines_per_file?: number
+          build_time_seconds?: number
+          code_size_score?: number
+          completeness_score?: number
+          created_at?: string
+          files_count?: number
+          files_summary?: Json
+          id?: string
+          interactivity_score?: number
+          issues?: Json | null
+          model_used?: string | null
+          phase_times?: Json | null
+          project_id?: string | null
+          prompt: string
+          quality_score?: number
+          suggestions?: Json | null
+          tailwind_score?: number
+          total_lines?: number
+          user_id: string
+          validation_retries?: number | null
+        }
+        Update: {
+          arabic_score?: number
+          avg_lines_per_file?: number
+          build_time_seconds?: number
+          code_size_score?: number
+          completeness_score?: number
+          created_at?: string
+          files_count?: number
+          files_summary?: Json
+          id?: string
+          interactivity_score?: number
+          issues?: Json | null
+          model_used?: string | null
+          phase_times?: Json | null
+          project_id?: string | null
+          prompt?: string
+          quality_score?: number
+          suggestions?: Json | null
+          tailwind_score?: number
+          total_lines?: number
+          user_id?: string
+          validation_retries?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "build_analytics_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       build_jobs: {
         Row: {
           build_prompt: string | null
@@ -246,6 +326,24 @@ export type Database = {
         }
         Relationships: []
       }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_usage: {
         Row: {
           builder_calls: number
@@ -292,9 +390,16 @@ export type Database = {
         }
         Returns: boolean
       }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "moderator" | "user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -421,6 +526,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "moderator", "user"],
+    },
   },
 } as const
