@@ -69,9 +69,28 @@ async function authenticateUser(req: Request): Promise<{ userId: string } | Resp
     });
   }
 
-  // TODO: Implement rate limiting for fixer
-
   return { userId: user.id };
+}
+
+// Helper to try multiple API keys against an endpoint
+async function tryKeys(
+  keys: string[],
+  url: string,
+  body: string,
+  label: string
+): Promise<Response | null> {
+  for (const key of keys) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body,
+    });
+    if (res.ok) { console.log(`${label} succeeded`); return res; }
+    if (res.status === 429) { console.warn(`${label} rate-limited, trying next...`); continue; }
+    console.error(`${label} error:`, res.status);
+    continue;
+  }
+  return null;
 }
 
 serve(async (req) => {
@@ -96,7 +115,9 @@ serve(async (req) => {
       Deno.env.get("GROQ_API_KEY_3"),
     ].filter(Boolean) as string[];
 
-    if (geminiKeys.length === 0 && groqKeys.length === 0) {
+    const lovableKey = Deno.env.get("LOVABLE_API_KEY");
+
+    if (geminiKeys.length === 0 && groqKeys.length === 0 && !lovableKey) {
       throw new Error("No AI API keys configured");
     }
 
@@ -139,35 +160,31 @@ serve(async (req) => {
 
     let response: Response | null = null;
 
-    // Try Gemini keys first
-    for (const key of geminiKeys) {
-      const res = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "gemini-2.5-flash", messages: aiMessages, stream: true, tools: toolsDef }),
-        }
-      );
-      if (res.ok) { response = res; console.log("Gemini fixer succeeded"); break; }
-      if (res.status === 429) { console.warn("Gemini fixer key rate-limited, trying next..."); continue; }
-      console.error("Gemini fixer error:", res.status);
-      continue;
-    }
+    // 1. Try Gemini
+    const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages: aiMessages, stream: true, tools: toolsDef });
+    response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini fixer");
 
-    // Fallback to Groq
+    // 2. Fallback to Groq
     if (!response) {
       console.warn("All Gemini keys exhausted for fixer, falling back to Groq...");
-      for (const gKey of groqKeys) {
-        const gRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${gKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages: aiMessages, stream: true, tools: toolsDef }),
-        });
-        if (gRes.ok) { response = gRes; console.log("Groq fixer fallback succeeded"); break; }
-        if (gRes.status === 429) { console.warn("Groq fixer key rate-limited, trying next..."); continue; }
-        console.error("Groq fixer error:", gRes.status);
-        continue;
+      const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages: aiMessages, stream: true, tools: toolsDef });
+      response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq fixer");
+    }
+
+    // 3. Final fallback: Lovable AI Gateway
+    if (!response && lovableKey) {
+      console.warn("All keys exhausted for fixer, falling back to Lovable AI...");
+      const lovableBody = JSON.stringify({ model: "google/gemini-2.5-flash", messages: aiMessages, stream: true, tools: toolsDef });
+      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${lovableKey}`, "Content-Type": "application/json" },
+        body: lovableBody,
+      });
+      if (res.ok) {
+        response = res;
+        console.log("Lovable AI fixer fallback succeeded");
+      } else {
+        console.error("Lovable AI fixer error:", res.status);
       }
     }
 
