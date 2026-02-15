@@ -194,8 +194,13 @@ export default function BuilderPage() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
                 {chat.loadingMessages ? (
-                  <div className="flex items-center justify-center py-16">
-                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  <div className="space-y-4 px-1 py-6">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className={`flex gap-2 ${i % 2 === 0 ? "flex-row-reverse" : "flex-row"}`}>
+                        <div className="w-7 h-7 rounded-lg bg-muted animate-pulse shrink-0" />
+                        <div className={`h-14 rounded-2xl bg-muted animate-pulse ${i % 2 === 0 ? "w-[55%]" : "w-[70%]"}`} />
+                      </div>
+                    ))}
                   </div>
                 ) : chat.messages.length === 0 ? (
                   <div className="flex flex-col items-center text-center gap-4 py-12">
