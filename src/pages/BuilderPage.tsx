@@ -237,8 +237,8 @@ export default function BuilderPage() {
                             </span>
                           )}
                         </div>
-                        {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length) ? (
-                          <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} />
+                        {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length || msg.pipelineStage) ? (
+                          <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} pipelineStage={msg.pipelineStage} handoffPrompt={msg.handoffPrompt} />
                         ) : null}
                       </div>
                     </div>
@@ -474,8 +474,8 @@ export default function BuilderPage() {
                         </span>
                       )}
                     </div>
-                    {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length) ? (
-                      <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} />
+                    {msg.role === "assistant" && (msg.thinkingSteps?.length || msg.affectedFiles?.length || msg.pipelineStage) ? (
+                      <ThinkingEngine steps={msg.thinkingSteps || []} affectedFiles={msg.affectedFiles} isComplete={!msg.isStreaming} dependencyGraph={engine.state.dependencyGraph} pipelineStage={msg.pipelineStage} handoffPrompt={msg.handoffPrompt} />
                     ) : null}
                   </div>
                 </div>

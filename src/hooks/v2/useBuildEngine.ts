@@ -121,6 +121,7 @@ export function useBuildEngine({
       content: "",
       timestamp: new Date(),
       isStreaming: true,
+      pipelineStage: "thinking",
     });
 
     abortControllerRef.current = new AbortController();
@@ -156,7 +157,7 @@ export function useBuildEngine({
         {
           onMessageDelta: (text) => {
             assistantContent += text;
-            updateMessage(assistantMsgId, { content: assistantContent });
+            updateMessage(assistantMsgId, { content: assistantContent, pipelineStage: "planning" });
           },
           onBuildReady: (prompt, summary, projectName, dependencyGraph) => {
             dispatch({ 
@@ -166,7 +167,11 @@ export function useBuildEngine({
             if (isFixAttempt) {
               dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
             }
-            updateMessage(assistantMsgId, { content: summary });
+            updateMessage(assistantMsgId, { 
+              content: summary, 
+              pipelineStage: "handoff",
+              handoffPrompt: prompt,
+            });
           },
           onDone: async () => {
             updateMessage(assistantMsgId, { isStreaming: false });
@@ -210,11 +215,13 @@ export function useBuildEngine({
     addMessage({
       id: assistantMsgId,
       role: "assistant",
-      content: "جاري تنفيذ خطة البناء التكرارية...",
+      content: "جاري تنفيذ خطة البناء...",
       timestamp: new Date(),
       isStreaming: true,
       thinkingSteps: [],
       affectedFiles: [],
+      pipelineStage: "building",
+      handoffPrompt: buildPromptContent,
     });
 
     abortControllerRef.current = new AbortController();
@@ -287,7 +294,7 @@ export function useBuildEngine({
               toast.success("تم تحديث النظام بنجاح! ⚡");
             }
             
-            updateMessage(assistantMsgId, { content: "اكتمل البناء! جارٍ المراجعة التلقائية... 🔍", isStreaming: false });
+            updateMessage(assistantMsgId, { content: "اكتمل البناء! جارٍ المراجعة التلقائية... 🔍", isStreaming: false, pipelineStage: "reviewing" });
             await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
             await saveProject();
 
@@ -311,6 +318,7 @@ export function useBuildEngine({
                     role: "assistant",
                     content: `✅ ${reviewResult.summary_ar}`,
                     timestamp: new Date(),
+                    pipelineStage: "done",
                   });
                   await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
                   // Clear approved badge after 4s
