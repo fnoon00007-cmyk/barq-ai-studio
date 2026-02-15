@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { ThinkingEngine } from "@/components/ThinkingEngine";
 import { PreviewPanel } from "@/components/v2/PreviewPanel";
+import { PreviewErrorBoundary } from "@/components/v2/PreviewErrorBoundary";
 import { GitHubExportModal } from "@/components/GitHubExportModal";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useBuilderChat } from "@/hooks/v2/useBuilderChat";
@@ -306,7 +307,9 @@ export default function BuilderPage() {
           ) : (
             /* Mobile Preview */
             <div className="flex flex-col h-full">
-              <PreviewPanel files={vfs.files} device="mobile" />
+              <PreviewErrorBoundary onFixError={engine.handleFixError}>
+                <PreviewPanel files={vfs.files} device="mobile" onIframeError={engine.handleFixError} />
+              </PreviewErrorBoundary>
             </div>
           )}
         </div>
@@ -585,7 +588,9 @@ export default function BuilderPage() {
           </ResizablePanel>
           <ResizableHandle withHandle />
           <ResizablePanel defaultSize={60} minSize={40} className="flex flex-col">
-            <PreviewPanel files={vfs.files} device={previewDevice} />
+            <PreviewErrorBoundary onFixError={engine.handleFixError}>
+              <PreviewPanel files={vfs.files} device={previewDevice} onIframeError={engine.handleFixError} />
+            </PreviewErrorBoundary>
             <div className="flex-shrink-0 border-t border-border bg-card p-2 flex items-center justify-center gap-2">
               {[{ d: "mobile" as const, icon: Smartphone }, { d: "tablet" as const, icon: Tablet }, { d: "desktop" as const, icon: Monitor }].map(({ d, icon: Icon }) => (
                 <button key={d} onClick={() => setPreviewDevice(d)} className={`p-2 rounded-md ${previewDevice === d ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}>
@@ -605,7 +610,9 @@ export default function BuilderPage() {
             </button>
             <h1 className="text-sm font-bold text-foreground">{projectTitle}</h1>
           </div>
-          <PreviewPanel files={vfs.files} device={previewDevice} />
+          <PreviewErrorBoundary onFixError={engine.handleFixError}>
+            <PreviewPanel files={vfs.files} device={previewDevice} onIframeError={engine.handleFixError} />
+          </PreviewErrorBoundary>
           <div className="flex-shrink-0 border-t border-border bg-card p-2 flex items-center justify-center gap-2">
             {[{ d: "mobile" as const, icon: Smartphone }, { d: "tablet" as const, icon: Tablet }, { d: "desktop" as const, icon: Monitor }].map(({ d, icon: Icon }) => (
               <button key={d} onClick={() => setPreviewDevice(d)} className={`p-2 rounded-md ${previewDevice === d ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-secondary"}`}>
