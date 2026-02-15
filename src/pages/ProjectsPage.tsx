@@ -185,6 +185,7 @@ export default function ProjectsPage() {
                     <img
                       src={project.thumbnail_url}
                       alt={project.title}
+                      loading="lazy"
                       className="w-full h-full object-cover object-top"
                     />
                   ) : project.preview_html ? (

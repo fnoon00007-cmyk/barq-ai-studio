@@ -1,7 +1,7 @@
 import { VFSFile } from "@/hooks/v2/useVFS";
 import { Globe, RefreshCw, Loader2 } from "lucide-react";
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
-import { buildPreviewHTML } from "@/lib/preview-builder";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { usePreviewWorker } from "@/hooks/usePreviewWorker";
 
 interface PreviewPanelProps {
   files: VFSFile[];
@@ -14,16 +14,8 @@ export function PreviewPanel({ files, device, onIframeError }: PreviewPanelProps
   const [isLoading, setIsLoading] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const previewHTML = useMemo(() => {
-    if (files.length === 0) return null;
-    try {
-      return buildPreviewHTML(files as any);
-    } catch (err) {
-      console.error("[PreviewPanel] Build error:", err);
-      return null;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, refreshKey]);
+  // Use Web Worker for preview building (non-blocking)
+  const { html: previewHTML, isBuilding } = usePreviewWorker(files, refreshKey);
 
   useEffect(() => {
     if (files.length > 0) {
@@ -80,6 +72,8 @@ export function PreviewPanel({ files, device, onIframeError }: PreviewPanelProps
     return previewHTML.replace("</head>", `${errorScript}\n</head>`);
   }, [previewHTML]);
 
+  const showLoading = isLoading || isBuilding;
+
   if (!enhancedHTML) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
@@ -101,17 +95,17 @@ export function PreviewPanel({ files, device, onIframeError }: PreviewPanelProps
         <span className="text-xs text-muted-foreground font-medium">المعاينة المباشرة</span>
         <button
           onClick={handleRefresh}
-          disabled={isLoading}
+          disabled={showLoading}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${showLoading ? "animate-spin" : ""}`} />
           تحديث
         </button>
       </div>
 
       {/* Preview Area */}
       <div className="flex-1 relative flex items-center justify-center p-4 overflow-auto bg-muted/30">
-        {isLoading && (
+        {showLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-2">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -127,6 +121,7 @@ export function PreviewPanel({ files, device, onIframeError }: PreviewPanelProps
           style={{ width: deviceWidth, height: deviceHeight }}
           sandbox="allow-scripts"
           title="معاينة الموقع"
+          loading="lazy"
         />
       </div>
     </div>
