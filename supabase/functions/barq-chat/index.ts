@@ -400,11 +400,13 @@ async function callAIForPhase(
 ): Promise<any | null> {
 
   async function doCall(msgs: Array<{role: string; content: string}>): Promise<any | null> {
+    const callStart = Date.now();
     const geminiBody = JSON.stringify({
       model: "gemini-2.5-flash",
       messages: msgs,
       stream: true,
       max_tokens: 16384,
+      temperature: 0.5,
       tools: toolsDef,
       tool_choice: { type: "function", function: { name: "generate_website" } },
     });
@@ -414,6 +416,7 @@ async function callAIForPhase(
       messages: msgs,
       stream: true,
       max_tokens: 16384,
+      temperature: 0.5,
       tools: toolsDef,
       tool_choice: { type: "function", function: { name: "generate_website" } },
     });
@@ -435,6 +438,7 @@ async function callAIForPhase(
         messages: msgs,
         stream: true,
         max_tokens: 16384,
+        temperature: 0.5,
         tools: toolsDef,
         tool_choice: { type: "function", function: { name: "generate_website" } },
       });
@@ -450,6 +454,12 @@ async function callAIForPhase(
 
     const toolCallArgs = await collectStreamedToolCall(response);
     if (!toolCallArgs) return null;
+
+    const callTime = Date.now() - callStart;
+    console.log(`[perf] AI call completed in ${callTime}ms (${(callTime / 1000).toFixed(1)}s)`);
+    if (callTime > 60000) {
+      console.warn(`⚠️ AI call took ${(callTime / 1000).toFixed(1)}s — exceeds 60s target`);
+    }
 
     try { return JSON.parse(toolCallArgs); } catch { return null; }
   }
@@ -550,6 +560,7 @@ serve(async (req) => {
 
     // If phaseNum specified, build only that phase
     if (phaseNum && phaseNum >= 1 && phaseNum <= 4) {
+      const phaseStartTime = Date.now();
       const currentPhase = BUILD_PHASES[phaseNum - 1];
       
       // For phases 2+, include CSS vars from phase 1 context
@@ -603,6 +614,12 @@ serve(async (req) => {
       ];
 
       const result = await callAIForPhase(messages, toolsDef, geminiKeys, groqKeys, lovableKey);
+
+      const phaseTime = Date.now() - phaseStartTime;
+      console.log(`[perf] Phase ${phaseNum} total: ${phaseTime}ms (${(phaseTime / 1000).toFixed(1)}s)`);
+      if (phaseTime > 60000) {
+        console.warn(`⚠️ Phase ${phaseNum} exceeded 60s target: ${(phaseTime / 1000).toFixed(1)}s`);
+      }
 
       if (!result) {
         return new Response(

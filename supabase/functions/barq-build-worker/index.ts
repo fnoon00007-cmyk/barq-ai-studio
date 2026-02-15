@@ -111,7 +111,7 @@ async function collectStreamedToolCall(response: Response): Promise<string> {
 function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─── Try multiple API keys with per-request timeout ───
-const AI_CALL_TIMEOUT = 120_000; // 2 minutes per provider attempt
+const AI_CALL_TIMEOUT = 45_000; // 45 seconds per provider attempt (optimized from 120s)
 
 async function tryKeys(keys: string[], url: string, body: string, label: string): Promise<Response | null> {
   for (const key of keys) {
@@ -137,21 +137,21 @@ async function tryKeys(keys: string[], url: string, body: string, label: string)
   return null;
 }
 
-// ─── Call AI for a single phase with retry ───
+// ─── Call AI for a single phase with retry + early termination ───
 const MAX_RETRIES = 3;
-const RETRY_DELAYS = [15000, 30000, 60000];
+const RETRY_DELAYS = [10000, 20000, 40000]; // Reduced delays for faster recovery
 
 async function callAIForPhase(
   messages: Array<{role: string; content: string}>,
   toolsDef: any[],
   geminiKeys: string[], groqKeys: string[], lovableKey: string | undefined
 ): Promise<any | null> {
-  const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
-  const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+  const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+  const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
-      const waitMs = RETRY_DELAYS[attempt - 1] || 60000;
+      const waitMs = RETRY_DELAYS[attempt - 1] || 40000;
       console.log(`[retry] Attempt ${attempt + 1}/${MAX_RETRIES + 1} — waiting ${waitMs / 1000}s...`);
       await delay(waitMs);
     }
@@ -159,7 +159,7 @@ async function callAIForPhase(
     let response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini");
     if (!response) response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq");
     if (!response && lovableKey) {
-      const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages, stream: true, max_tokens: 16384, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+      const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
       const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" }, body: lb });
       if (res.ok) response = res;
     }
@@ -167,9 +167,16 @@ async function callAIForPhase(
     if (response) {
       const args = await collectStreamedToolCall(response);
       if (args) {
-        try { return JSON.parse(args); } catch { console.error("[parse] Failed to parse tool call args"); }
+        try {
+          const parsed = JSON.parse(args);
+          // Early termination: if we got valid files, return immediately
+          if (parsed?.vfs_operations?.length > 0) {
+            console.log(`[callAI] ✅ Got ${parsed.vfs_operations.length} files, early termination`);
+            return parsed;
+          }
+        } catch { console.error("[parse] Failed to parse tool call args"); }
       }
-      console.warn("[stream] No tool call args, retrying...");
+      console.warn("[stream] No valid tool call args, retrying...");
       continue;
     }
     console.warn(`[retry] All providers failed on attempt ${attempt + 1}`);
@@ -192,6 +199,7 @@ serve(async (req) => {
     if (!job_id || !phase_number) throw new Error("job_id and phase_number required");
 
     console.log(`[worker] Job ${job_id} — Phase ${phase_number}`);
+    const phaseStartTime = Date.now();
 
     // Load job from DB
     const { data: job, error: jobErr } = await supabase
@@ -294,11 +302,19 @@ serve(async (req) => {
 
     const result = await callAIForPhase(messages, toolsDef, geminiKeys, groqKeys, lovableKey);
 
+    // ─── Performance Monitoring ───
+    const phaseTime = Date.now() - phaseStartTime;
+    console.log(`[perf] Phase ${phaseNum} completed in ${phaseTime}ms (${(phaseTime / 1000).toFixed(1)}s)`);
+    if (phaseTime > 60000) {
+      console.warn(`⚠️ Phase ${phaseNum} took ${(phaseTime / 1000).toFixed(1)}s — exceeds 60s target`);
+    }
+
     if (!result || !result.vfs_operations?.length) {
+      console.error(`[worker] Phase ${phaseNum} failed after ${(phaseTime / 1000).toFixed(1)}s`);
       await supabase.from("build_jobs").update({
         status: `failed_phase_${phaseNum}`,
       }).eq("id", job_id);
-      return new Response(JSON.stringify({ status: "failed", phase: phaseNum }), {
+      return new Response(JSON.stringify({ status: "failed", phase: phaseNum, timeMs: phaseTime }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -319,7 +335,7 @@ serve(async (req) => {
       ...(isLastPhase ? { completed_at: new Date().toISOString() } : {}),
     }).eq("id", job_id);
 
-    console.log(`[worker] Phase ${phaseNum} done — ${phaseFiles.length} files saved`);
+    console.log(`[worker] Phase ${phaseNum} done — ${phaseFiles.length} files saved in ${(phaseTime / 1000).toFixed(1)}s`);
 
     // Fire-and-forget: trigger next phase
     if (!isLastPhase) {
