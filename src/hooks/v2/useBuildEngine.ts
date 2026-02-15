@@ -1,7 +1,7 @@
 
 import { useState, useCallback, useRef, useReducer } from "react";
 import { toast } from "sonner";
-import { streamBarqPlanner, streamBarqBuilder, streamBarqFixer } from "@/lib/barq-api";
+import { streamBarqPlanner, streamBarqBuilder, streamBarqFixer, reviewBuild } from "@/lib/barq-api";
 import { VFSFile, VFSOperation } from "./useVFS";
 import { ChatMessage, ThinkingStep } from "./useBuilderChat";
 
@@ -283,13 +283,61 @@ export function useBuildEngine({
             }));
 
             if (finalOps.length > 0) {
-              await applyVFSOperations(finalOps, "AI build update"); // Pass message for VFS history
+              await applyVFSOperations(finalOps, "AI build update");
               toast.success("تم تحديث النظام بنجاح! ⚡");
             }
             
-            updateMessage(assistantMsgId, { content: "اكتمل التحديث التكراري! ✨", isStreaming: false });
-            await saveMessage({ role: "assistant", content: "اكتمل التحديث التكراري! ✨" });
+            updateMessage(assistantMsgId, { content: "اكتمل البناء! جارٍ المراجعة التلقائية... 🔍", isStreaming: false });
+            await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
             await saveProject();
+
+            // --- Auto Review Phase ---
+            if (finalOps.length > 0 && buildPromptContent) {
+              dispatch({ type: "SET_STATUS", payload: { reviewStatus: "reviewing" } });
+              try {
+                const reviewFiles = finalOps.map(op => ({
+                  path: op.path,
+                  content: op.content || "",
+                  language: op.path.endsWith(".css") ? "css" : "tsx",
+                }));
+
+                const reviewResult = await reviewBuild(buildPromptContent, reviewFiles);
+
+                if (reviewResult.status === "approved") {
+                  dispatch({ type: "SET_STATUS", payload: { reviewStatus: "approved" } });
+                  const reviewMsgId = crypto.randomUUID();
+                  addMessage({
+                    id: reviewMsgId,
+                    role: "assistant",
+                    content: `✅ ${reviewResult.summary_ar}`,
+                    timestamp: new Date(),
+                  });
+                  await saveMessage({ role: "assistant", content: `✅ ${reviewResult.summary_ar}` });
+                  // Clear approved badge after 4s
+                  setTimeout(() => dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } }), 4000);
+                } else if (reviewResult.status === "needs_fix" && reviewResult.fix_prompt) {
+                  dispatch({ type: "SET_STATUS", payload: { reviewStatus: "fixing" } });
+                  const issuesSummary = reviewResult.issues
+                    .map(i => `• ${i.file}: ${i.issue}`)
+                    .join("\n");
+                  const reviewMsgId = crypto.randomUUID();
+                  addMessage({
+                    id: reviewMsgId,
+                    role: "assistant",
+                    content: `🔧 المراجعة وجدت مشاكل:\n${issuesSummary}\n\nجارٍ الإصلاح التلقائي...`,
+                    timestamp: new Date(),
+                  });
+                  await saveMessage({ role: "assistant", content: reviewResult.summary_ar });
+                  // Auto-fix: re-send the fix prompt through the planner
+                  handleSendMessage(reviewResult.fix_prompt, true);
+                } else {
+                  dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+                }
+              } catch (reviewErr: any) {
+                console.warn("Auto-review failed (non-blocking):", reviewErr.message);
+                dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
+              }
+            }
           },
           onError: (error) => {
             throw new Error(error);
@@ -307,7 +355,7 @@ export function useBuildEngine({
       dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false } });
       abortControllerRef.current = null;
     }
-  }, [state.buildPrompt, state.dependencyGraph, userId, projectId, files, applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject, getAuthToken]);
+  }, [state.buildPrompt, state.dependencyGraph, userId, projectId, files, applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject, getAuthToken, handleSendMessage]);
 
   // --- Phase 3: Error Fixing (Gemini 2.0 Flash) ---
   const handleFixError = useCallback(async (errorMessage: string, componentStack: string) => {
