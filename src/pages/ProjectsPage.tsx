@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { Plus, Globe, Calendar, Loader2, Trash2, Zap, LogOut, MoreVertical, Pencil } from "lucide-react";
+import { Plus, Globe, Calendar, Trash2, Zap, LogOut, MoreVertical, Pencil } from "lucide-react";
+import { ProjectsSkeleton } from "@/components/BarqSkeleton";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -157,9 +158,7 @@ export default function ProjectsPage() {
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 text-primary animate-spin" />
-          </div>
+          <ProjectsSkeleton />
         ) : projects.length === 0 ? (
           <div className="text-center py-24">
             <Globe className="h-16 w-16 text-muted-foreground/20 mx-auto mb-5" />

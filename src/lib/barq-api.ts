@@ -20,7 +20,9 @@ export interface StreamCallbacks {
   onError?: (error: string) => void;
 }
 
-const STREAM_TIMEOUT_MS = 45_000;
+const STREAM_TIMEOUT_MS = 60_000; // Increased from 45s to 60s
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 2_000;
 
 /** Get auth headers with user's actual session token */
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -146,6 +148,48 @@ async function processSSEStream(
   }
 }
 
+/** Helper: fetch with automatic retry on transient errors */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retries = MAX_RETRIES
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const resp = await fetch(url, options);
+      
+      // Retry on 429 (rate limit) or 502/503/504 (server errors)
+      if ((resp.status === 429 || resp.status >= 502) && attempt < retries) {
+        const delay = RETRY_DELAY_MS * (attempt + 1); // Progressive backoff
+        console.warn(`[barq-api] HTTP ${resp.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: "فشل الاتصال بالخدمة" }));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+      
+      return resp;
+    } catch (err: any) {
+      lastError = err;
+      if (err.name === "AbortError") throw err;
+      if (attempt < retries && !err.message?.includes("يرجى تسجيل الدخول")) {
+        const delay = RETRY_DELAY_MS * (attempt + 1);
+        console.warn(`[barq-api] Network error, retrying in ${delay}ms:`, err.message);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  
+  throw lastError || new Error("فشل الاتصال بعد عدة محاولات");
+}
+
 /** Stream conversation with the Gemini planner */
 export async function streamBarqPlanner(
   payload: { conversationHistory: { role: string; content: string }[]; projectId: string | null; vfsContext: any[] },
@@ -155,17 +199,12 @@ export async function streamBarqPlanner(
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-planner`;
   const headers = await getAuthHeaders();
 
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     method: "POST",
     headers,
     body: JSON.stringify({ messages: payload.conversationHistory, projectId: payload.projectId, vfsContext: payload.vfsContext }),
     signal,
   });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: "فشل الاتصال" }));
-    throw new Error(err.error || `HTTP ${resp.status}`);
-  }
 
   await processSSEStream(resp, callbacks, signal);
 }
@@ -186,17 +225,12 @@ export async function streamBarqBuilder(
     existing_files: payload.existingFiles,
   };
 
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     signal,
   });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: "فشل الاتصال" }));
-    throw new Error(err.error || `HTTP ${resp.status}`);
-  }
 
   await processSSEStream(resp, callbacks, signal);
 }
@@ -216,16 +250,11 @@ export async function reviewBuild(
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-reviewer`;
   const headers = await getAuthHeaders();
 
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     method: "POST",
     headers,
     body: JSON.stringify({ build_prompt: buildPrompt, files }),
   });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: "فشل المراجعة" }));
-    throw new Error(err.error || `HTTP ${resp.status}`);
-  }
 
   return resp.json();
 }
@@ -284,7 +313,7 @@ export async function streamBarqFixer(
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-fixer`;
   const headers = await getAuthHeaders();
 
-  const resp = await fetch(url, {
+  const resp = await fetchWithRetry(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -295,17 +324,12 @@ export async function streamBarqFixer(
     signal,
   });
 
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: "فشل الاتصال بخدمة الإصلاح" }));
-    throw new Error(err.error || `HTTP ${resp.status}`);
-  }
-
   await processSSEStream(resp, {
     onFixReady: (operations, summary) => {
       callbacks.onFixReady?.(operations, summary);
     },
     onDone: callbacks.onDone,
     onError: callbacks.onError,
-    onMessageDelta: callbacks.onMessageDelta, // For any text output from fixer
+    onMessageDelta: callbacks.onMessageDelta,
   }, signal);
 }

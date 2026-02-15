@@ -189,7 +189,25 @@ export function useBuildEngine({
         abortControllerRef.current.signal
       );
     } catch (err: any) {
-      const errorMessage = err.name === "AbortError" ? "انقطع الاتصال." : err.message || "حدث خطأ غير متوقع.";
+      const isAbort = err.name === "AbortError";
+      const isAuth = err.message?.includes("تسجيل الدخول");
+      const isRateLimit = err.message?.includes("429") || err.message?.includes("الحد");
+      
+      let errorMessage: string;
+      if (isAbort) {
+        errorMessage = "انقطع الاتصال.";
+        toast.warning("انقطع الاتصال بالخدمة. حاول مرة ثانية.");
+      } else if (isAuth) {
+        errorMessage = "يرجى تسجيل الدخول أولاً";
+        toast.error("انتهت جلسة تسجيل الدخول. يرجى إعادة تسجيل الدخول.");
+      } else if (isRateLimit) {
+        errorMessage = "وصلت للحد اليومي. حاول بكرة 😊";
+        toast.error("وصلت للحد اليومي من الاستخدام. حاول مرة ثانية بكرة.");
+      } else {
+        errorMessage = err.message || "حدث خطأ غير متوقع.";
+        toast.error(`خطأ: ${errorMessage}`);
+      }
+      
       updateMessage(assistantMsgId, { content: errorMessage, isStreaming: false });
       dispatch({ type: "SET_STATUS", payload: { error: errorMessage } });
       saveMessage({ role: "assistant", content: errorMessage });
@@ -375,9 +393,15 @@ export function useBuildEngine({
       );
 
     } catch (err: any) {
-      const errorMessage = err.name === "AbortError" ? "تم إيقاف عملية البناء." : err.message || "حدث خطأ أثناء البناء.";
+      const isAbort = err.name === "AbortError";
+      const errorMessage = isAbort ? "تم إيقاف عملية البناء." : err.message || "حدث خطأ أثناء البناء.";
       updateMessage(assistantMsgId, { content: errorMessage, isStreaming: false });
       dispatch({ type: "SET_STATUS", payload: { error: errorMessage } });
+      if (isAbort) {
+        toast.warning("تم إيقاف البناء.");
+      } else {
+        toast.error(`فشل البناء: ${errorMessage}`);
+      }
       saveMessage({ role: "assistant", content: errorMessage });
     } finally {
       dispatch({ type: "SET_STATUS", payload: { isBuilding: false, isThinking: false } });
@@ -431,6 +455,7 @@ export function useBuildEngine({
       const errorMsg = err.name === "AbortError" ? "تم إلغاء عملية الإصلاح." : err.message || "حدث خطأ أثناء محاولة الإصلاح.";
       updateMessage(assistantMsgId, { content: errorMsg, isStreaming: false });
       dispatch({ type: "SET_STATUS", payload: { error: errorMsg, reviewStatus: null } });
+      toast.error(`فشل الإصلاح التلقائي: ${errorMsg}`);
     } finally {
       dispatch({ type: "SET_STATUS", payload: { reviewStatus: null } });
       abortControllerRef.current = null;
