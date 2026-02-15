@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowRight, FlaskConical, FileCode2, BarChart3, Code2,
   ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, XCircle,
-  Sparkles, Lightbulb, Loader2
+  Sparkles, Lightbulb, Loader2, Bug
 } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { validateCodeQuality, type CodeQualityReport, type VFSFile } from "@/lib/code-validator";
@@ -203,17 +203,40 @@ export default function TestQualityPage() {
       // Phase 2: Building
       const collectedFiles: VFSFile[] = [];
 
+      console.log("=== PLANNER DONE ===");
+      console.log("Build prompt length:", buildPrompt.length);
+
       await streamBarqBuilder(
         { buildPrompt, projectId: null, dependencyGraph, existingFiles: [] },
         {
-          onFileStart: (path) => setBuildPhase(`📄 ${path}`),
+          onFileStart: (path) => {
+            console.log("🔨 Generating:", path);
+            setBuildPhase(`📄 ${path}`);
+          },
           onFileDone: (path, content) => {
+            console.log("✅ File generated:", path, "Length:", content?.length || 0, "Lines:", content?.split("\n").length || 0);
             collectedFiles.push({ name: path.split("/").pop() || path, content });
           },
           onDone: () => {},
           onError: (err) => { throw new Error(err); },
         }
       );
+
+      // Debug: log build results
+      console.log("=== BUILD RESULTS ===");
+      console.log("Files count:", collectedFiles.length);
+      console.log("Files:", collectedFiles.map(f => ({
+        name: f.name,
+        lines: f.content.split("\n").length,
+        chars: f.content.length,
+        preview: f.content.substring(0, 100),
+      })));
+
+      const emptyFiles = collectedFiles.filter(f => f.content.split("\n").length <= 5);
+      if (emptyFiles.length > 0) {
+        console.warn("⚠️ Empty files detected:", emptyFiles.map(f => f.name));
+        toast.warning(`تحذير: ${emptyFiles.length} ملف فارغ أو قصير جداً`);
+      }
 
       // Phase 3: Analyze
       setIsBuilding(false);
@@ -495,6 +518,43 @@ export default function TestQualityPage() {
                 <button onClick={() => setShowCode(!showCode)} className="mt-4 inline-flex items-center gap-2 text-sm text-primary hover:text-primary/80 font-semibold transition-colors">
                   {showCode ? <><ChevronUp className="h-4 w-4" /> اقرأ أقل</> : <><ChevronDown className="h-4 w-4" /> عرض الكود الكامل</>}
                 </button>
+              </section>
+            )}
+
+            {/* Debug Panel */}
+            {builtFiles.length > 0 && (
+              <section className="bg-card border border-destructive/30 rounded-3xl p-8 sm:p-10 shadow-sm">
+                <h2 className="text-xl font-bold text-foreground mb-6 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-destructive/10 flex items-center justify-center">
+                    <Bug className="h-5 w-5 text-destructive" />
+                  </div>
+                  🐛 Debug Info
+                </h2>
+                <div className="space-y-3 text-sm font-mono text-muted-foreground">
+                  <div>عدد الملفات: <span className="text-foreground font-bold">{builtFiles.length}</span></div>
+                  <div>إجمالي الأحرف: <span className="text-foreground font-bold">{builtFiles.reduce((s, f) => s + f.content.length, 0).toLocaleString()}</span></div>
+                  <div>إجمالي الأسطر: <span className="text-foreground font-bold">{builtFiles.reduce((s, f) => s + f.content.split("\n").length, 0).toLocaleString()}</span></div>
+                  <div>متوسط الحجم: <span className="text-foreground font-bold">{Math.round(builtFiles.reduce((s, f) => s + f.content.length, 0) / builtFiles.length).toLocaleString()} حرف</span></div>
+                  {(() => {
+                    const sorted = [...builtFiles].sort((a, b) => b.content.length - a.content.length);
+                    const biggest = sorted[0];
+                    const smallest = sorted[sorted.length - 1];
+                    return (
+                      <>
+                        <div>أكبر ملف: <span className="text-foreground font-bold">{biggest?.name}</span> ({biggest?.content.length.toLocaleString()} حرف / {biggest?.content.split("\n").length} سطر)</div>
+                        <div>أصغر ملف: <span className="text-foreground font-bold">{smallest?.name}</span> ({smallest?.content.length.toLocaleString()} حرف / {smallest?.content.split("\n").length} سطر)</div>
+                      </>
+                    );
+                  })()}
+                  {(() => {
+                    const empty = builtFiles.filter(f => f.content.split("\n").length <= 5);
+                    return empty.length > 0 ? (
+                      <div className="text-destructive">⚠️ ملفات فارغة: {empty.map(f => f.name).join(", ")}</div>
+                    ) : (
+                      <div className="text-primary">✅ لا توجد ملفات فارغة</div>
+                    );
+                  })()}
+                </div>
               </section>
             )}
 
