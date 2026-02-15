@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { validateCodeQuality, type CodeQualityReport, type VFSFile } from "@/lib/code-validator";
-import { streamBarqPlanner, streamBarqBuilder } from "@/lib/barq-api";
+import { streamBarqPlanner, streamBarqBuilder, BUILD_PHASES } from "@/lib/barq-api";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
@@ -143,6 +143,51 @@ function StatusIcon({ lines }: { lines: number }) {
 
 // ─── Main page ───
 
+// Phase progress indicator component
+function PhaseProgressBar({ currentPhase, completedPhases }: { currentPhase: number; completedPhases: number[] }) {
+  return (
+    <div className="mb-6 p-5 rounded-2xl bg-muted/50 border border-border">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-bold text-foreground">تقدم البناء المرحلي</span>
+        <span className="text-xs text-muted-foreground font-mono">
+          {completedPhases.length}/{BUILD_PHASES.length} مراحل
+        </span>
+      </div>
+      <div className="flex gap-2 mb-3">
+        {BUILD_PHASES.map((phase) => {
+          const isCompleted = completedPhases.includes(phase.id);
+          const isCurrent = currentPhase === phase.id;
+          return (
+            <div key={phase.id} className="flex-1">
+              <div className={`h-2 rounded-full transition-all duration-500 ${
+                isCompleted ? "bg-primary" : isCurrent ? "bg-primary/50 animate-pulse" : "bg-border"
+              }`} />
+            </div>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {BUILD_PHASES.map((phase) => {
+          const isCompleted = completedPhases.includes(phase.id);
+          const isCurrent = currentPhase === phase.id;
+          return (
+            <div key={phase.id} className={`text-xs rounded-xl px-3 py-2 text-center border transition-all duration-300 ${
+              isCompleted 
+                ? "bg-primary/10 border-primary/30 text-primary font-bold" 
+                : isCurrent 
+                  ? "bg-accent/10 border-accent/30 text-accent-foreground font-bold animate-pulse" 
+                  : "bg-muted border-border text-muted-foreground"
+            }`}>
+              <div className="font-bold">{isCompleted ? "✅" : isCurrent ? "⚡" : "⏳"} {phase.label}</div>
+              <div className="text-[10px] mt-0.5 opacity-70">{phase.files.join("، ")}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function TestQualityPage() {
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState("");
@@ -152,8 +197,10 @@ export default function TestQualityPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [buildPhase, setBuildPhase] = useState<string>("");
   const [builtFiles, setBuiltFiles] = useState<VFSFile[]>([]);
+  const [currentPhaseNum, setCurrentPhaseNum] = useState(0);
+  const [completedPhases, setCompletedPhases] = useState<number[]>([]);
 
-  // Real build + analyze
+  // Real build + analyze (4-phase)
   const handleTest = async () => {
     if (!prompt.trim()) {
       toast.error("الرجاء كتابة طلب البناء");
@@ -164,6 +211,8 @@ export default function TestQualityPage() {
     setReport(null);
     setShowCode(false);
     setBuiltFiles([]);
+    setCurrentPhaseNum(0);
+    setCompletedPhases([]);
     setBuildPhase("📋 برق يخطط المشروع...");
 
     try {
@@ -185,7 +234,6 @@ export default function TestQualityPage() {
           onBuildReady: (bp, _summary, _name, dg) => {
             buildPrompt = bp;
             dependencyGraph = dg;
-            setBuildPhase("⚡ المبرمج ينفّذ...");
           },
           onMessageDelta: () => {},
           onDone: () => {},
@@ -194,45 +242,70 @@ export default function TestQualityPage() {
       );
 
       if (!buildPrompt) {
-        // Planner didn't produce a build prompt — may still be in conversation mode
         toast.info("المخطط يحتاج مزيد من التفاصيل — حاول وصفاً أطول");
         setIsBuilding(false);
         return;
       }
 
-      // Phase 2: Building
-      const collectedFiles: VFSFile[] = [];
-
       console.log("=== PLANNER DONE ===");
       console.log("Build prompt length:", buildPrompt.length);
 
-      await streamBarqBuilder(
-        { buildPrompt, projectId: null, dependencyGraph, existingFiles: [] },
-        {
-          onFileStart: (path) => {
-            console.log("🔨 Generating:", path);
-            setBuildPhase(`📄 ${path}`);
-          },
-          onFileDone: (path, content) => {
-            console.log("✅ File generated:", path, "Length:", content?.length || 0, "Lines:", content?.split("\n").length || 0);
-            collectedFiles.push({ name: path.split("/").pop() || path, content });
-          },
-          onDone: () => {},
-          onError: (err) => { throw new Error(err); },
-        }
-      );
+      // Phase 2: Multi-phase Building (4 phases)
+      const allCollectedFiles: VFSFile[] = [];
 
-      // Debug: log build results
+      for (let phaseNum = 1; phaseNum <= BUILD_PHASES.length; phaseNum++) {
+        const phase = BUILD_PHASES[phaseNum - 1];
+        setCurrentPhaseNum(phaseNum);
+        setBuildPhase(`⚡ المرحلة ${phaseNum}/${BUILD_PHASES.length}: ${phase.label} — ${phase.files.join("، ")}`);
+
+        console.log(`=== PHASE ${phaseNum}: ${phase.label} ===`);
+
+        const existingFromPrev = allCollectedFiles.map(f => ({
+          path: f.name,
+          content: f.content,
+          language: (f.name.endsWith(".css") ? "css" : "tsx") as "css" | "tsx",
+        }));
+
+        const phaseFiles: VFSFile[] = [];
+
+        await streamBarqBuilder(
+          {
+            buildPrompt,
+            projectId: null,
+            dependencyGraph,
+            existingFiles: existingFromPrev,
+            phase: phaseNum,
+          },
+          {
+            onFileStart: (path) => {
+              console.log("🔨 Generating:", path);
+              setBuildPhase(`⚡ المرحلة ${phaseNum}: 📄 ${path}`);
+            },
+            onFileDone: (path, content) => {
+              console.log("✅ File generated:", path, "Length:", content?.length || 0, "Lines:", content?.split("\n").length || 0);
+              phaseFiles.push({ name: path.split("/").pop() || path, content });
+            },
+            onDone: () => {},
+            onError: (err) => { throw new Error(err); },
+          }
+        );
+
+        allCollectedFiles.push(...phaseFiles);
+        setCompletedPhases(prev => [...prev, phaseNum]);
+        toast.success(`المرحلة ${phaseNum}/${BUILD_PHASES.length} اكتملت: ${phase.label} ⚡`);
+      }
+
+      // Debug logs
       console.log("=== BUILD RESULTS ===");
-      console.log("Files count:", collectedFiles.length);
-      console.log("Files:", collectedFiles.map(f => ({
+      console.log("Files count:", allCollectedFiles.length);
+      console.log("Files:", allCollectedFiles.map(f => ({
         name: f.name,
         lines: f.content.split("\n").length,
         chars: f.content.length,
         preview: f.content.substring(0, 100),
       })));
 
-      const emptyFiles = collectedFiles.filter(f => f.content.split("\n").length <= 5);
+      const emptyFiles = allCollectedFiles.filter(f => f.content.split("\n").length <= 5);
       if (emptyFiles.length > 0) {
         console.warn("⚠️ Empty files detected:", emptyFiles.map(f => f.name));
         toast.warning(`تحذير: ${emptyFiles.length} ملف فارغ أو قصير جداً`);
@@ -242,13 +315,14 @@ export default function TestQualityPage() {
       setIsBuilding(false);
       setIsAnalyzing(true);
       setBuildPhase("🔍 جاري تحليل الجودة...");
-      setBuiltFiles(collectedFiles);
+      setBuiltFiles(allCollectedFiles);
 
       setTimeout(() => {
-        const result = validateCodeQuality(collectedFiles);
+        const result = validateCodeQuality(allCollectedFiles);
         setReport(result);
         setIsAnalyzing(false);
         setBuildPhase("");
+        setCurrentPhaseNum(0);
         if (result.passed) toast.success(`✅ جودة ممتازة: ${result.score}/100`);
         else toast.warning(`⚠️ الجودة: ${result.score}/100`);
       }, 600);
@@ -258,6 +332,7 @@ export default function TestQualityPage() {
       setIsBuilding(false);
       setIsAnalyzing(false);
       setBuildPhase("");
+      setCurrentPhaseNum(0);
     }
   };
 
@@ -359,6 +434,11 @@ export default function TestQualityPage() {
             />
             <div className="text-xs text-muted-foreground mt-1.5 text-left">{prompt.length} حرف</div>
           </div>
+
+          {/* Phase progress bar */}
+          {isBuilding && currentPhaseNum > 0 && (
+            <PhaseProgressBar currentPhase={currentPhaseNum} completedPhases={completedPhases} />
+          )}
 
           {/* Build phase indicator */}
           {buildPhase && (
