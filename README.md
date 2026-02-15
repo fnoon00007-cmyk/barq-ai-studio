@@ -262,6 +262,37 @@ type PipelineStage = 'thinking' | 'planning' | 'handoff' | 'building' | 'reviewi
 - **الجوال:** عرض ملء الشاشة مع شريط تنقل سفلي
 - تبديل بين: **المحادثة** · **المعاينة** · **الكود**
 
+### ⚡ تحسينات الأداء (Performance Optimizations)
+
+#### 1. Lazy Loading + Code Splitting
+- جميع الصفحات محملة بـ `React.lazy()` + `Suspense`
+- كل صفحة في chunk منفصل (BuilderPage, ProjectsPage, LandingPage, إلخ)
+- `PageLoader` — مكون fallback أنيق بالعربي أثناء تحميل الصفحات
+- يقلل حجم الـ initial bundle بشكل كبير
+
+#### 2. Web Worker لمحرك المعاينة
+- `preview-builder.worker.ts` — ينقل منطق JSX→HTML إلى thread منفصل
+- `usePreviewWorker` hook — واجهة سلسة مع fallback للـ main thread
+- لا يعطل واجهة المستخدم أثناء بناء المعاينة (non-blocking)
+- يدعم الإلغاء عبر `pendingId` pattern
+
+#### 3. TanStack Query Optimization
+- `staleTime: 5 دقائق` — يقلل طلبات API المتكررة
+- `gcTime: 10 دقائق` — يحتفظ بالبيانات في الذاكرة
+- `retry: 2` — إعادة محاولة تلقائية
+- `refetchOnWindowFocus: false` — لا يعيد التحميل عند التركيز
+
+#### 4. Navigation Progress Bar
+- شريط تقدم أزرق رفيع في أعلى الصفحة عند التنقل
+- `NavigationProgress` — مكون Pure CSS بدون مكتبات خارجية
+- أنيميشن: 0% → 80% (400ms) → 100% (200ms) → fade out
+- يتتبع `location.pathname` تلقائياً
+
+#### 5. Image Lazy Loading
+- جميع `<iframe>` تستخدم `loading="lazy"`
+- صور المشاريع في ProjectsPage محملة lazily
+- Skeleton loaders أثناء تحميل المحتوى
+
 ---
 
 ## 🛠 التقنيات المستخدمة
