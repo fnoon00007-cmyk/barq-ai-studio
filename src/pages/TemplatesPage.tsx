@@ -6,16 +6,19 @@ import {
   type Template,
   type TemplateCategory,
 } from "@/lib/templates-data";
-import { Search, ArrowRight, Layers, Palette, Loader2 } from "lucide-react";
+import { Search, ArrowRight, Layers } from "lucide-react";
 import BarqLogo from "@/components/BarqLogo";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import TemplateCard from "@/components/templates/TemplateCard";
+import TemplatePreviewModal from "@/components/templates/TemplatePreviewModal";
 
 export default function TemplatesPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<TemplateCategory | "all">("all");
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
 
   const filtered = useMemo(() => {
     let list = TEMPLATES;
@@ -40,7 +43,6 @@ export default function TemplatesPage() {
         navigate("/auth");
         return;
       }
-      // Navigate to builder with the template prompt
       navigate(`/builder?prompt=${encodeURIComponent(template.prompt)}`);
       toast.success(`جارٍ بناء: ${template.title} ⚡`);
     } catch {
@@ -88,7 +90,7 @@ export default function TemplatesPage() {
             اختر قالبك و<span className="text-primary">ابدأ البناء</span> فوراً ⚡
           </h1>
           <p className="text-muted-foreground text-lg max-w-xl mx-auto mb-8">
-            12 قالب احترافي جاهز للتخصيص — اختر واحد وبرق يبنيه لك بثوانٍ
+            {TEMPLATES.length} قالب احترافي جاهز للتخصيص — اختر واحد وبرق يبنيه لك بثوانٍ
           </p>
 
           {/* Search */}
@@ -158,6 +160,7 @@ export default function TemplatesPage() {
                   template={template}
                   isLoading={loadingId === template.id}
                   onUse={() => handleUseTemplate(template)}
+                  onPreview={() => setPreviewTemplate(template)}
                 />
               ))}
             </div>
@@ -175,70 +178,15 @@ export default function TemplatesPage() {
           </button>
         </div>
       </footer>
-    </div>
-  );
-}
 
-function TemplateCard({ template, isLoading, onUse }: { template: Template; isLoading: boolean; onUse: () => void }) {
-  return (
-    <div className="group bg-card border border-border rounded-2xl overflow-hidden hover:border-primary/40 hover:shadow-xl hover:shadow-primary/5 transition-all duration-300">
-      {/* Thumbnail */}
-      <div
-        className="h-44 relative overflow-hidden"
-        style={{
-          background: `linear-gradient(135deg, ${template.colors.primary}22, ${template.colors.secondary}33)`,
-        }}
-      >
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-6xl group-hover:scale-110 transition-transform duration-300">{template.icon}</span>
-        </div>
-        {template.featured && (
-          <div className="absolute top-3 left-3 px-2.5 py-1 rounded-lg bg-accent/90 text-accent-foreground text-[10px] font-bold">
-            ⭐ مميز
-          </div>
-        )}
-        <div className="absolute top-3 right-3 px-2.5 py-1 rounded-lg bg-background/80 backdrop-blur text-foreground text-[10px] font-bold">
-          {CATEGORY_LABELS[template.category].icon} {CATEGORY_LABELS[template.category].label}
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="p-4">
-        <h3 className="font-bold text-foreground text-lg mb-1.5">{template.title}</h3>
-        <p className="text-sm text-muted-foreground leading-relaxed mb-3 line-clamp-2">{template.description}</p>
-
-        {/* Meta */}
-        <div className="flex items-center gap-3 mb-4 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <Layers className="h-3.5 w-3.5" />
-            {template.pageCount} مكونات
-          </span>
-          <span className="flex items-center gap-1.5">
-            <Palette className="h-3.5 w-3.5" />
-            <span className="flex gap-1">
-              {[template.colors.primary, template.colors.secondary, template.colors.accent].map((c) => (
-                <span key={c} className="w-3.5 h-3.5 rounded-full border border-border" style={{ backgroundColor: c }} />
-              ))}
-            </span>
-          </span>
-        </div>
-
-        {/* CTA */}
-        <button
-          onClick={onUse}
-          disabled={isLoading}
-          className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground font-bold text-sm hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
-        >
-          {isLoading ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              جارٍ الإنشاء...
-            </>
-          ) : (
-            "استخدم هذا القالب ⚡"
-          )}
-        </button>
-      </div>
+      {/* Preview Modal */}
+      <TemplatePreviewModal
+        template={previewTemplate}
+        open={!!previewTemplate}
+        onOpenChange={(open) => !open && setPreviewTemplate(null)}
+        onUseTemplate={handleUseTemplate}
+        isUsing={!!loadingId}
+      />
     </div>
   );
 }
