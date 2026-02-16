@@ -5,6 +5,7 @@ import { streamBarqPlanner, streamBarqBuilder, streamBarqFixer, reviewBuild, BUI
 import { VFSFile, VFSOperation } from "./useVFS";
 import { ChatMessage, ThinkingStep } from "./useBuilderChat";
 import { supabase } from "@/integrations/supabase/client";
+import { hasFullTemplate, loadTemplateFiles } from "@/lib/template-registry";
 
 // --- Types and Interfaces ---
 
@@ -669,17 +670,40 @@ export function useBuildEngine({
         dispatch({ type: "SET_STATUS", payload: { serverSideBuild: true } });
 
         updateMessage(assistantMsgId, {
-          content: "🚀 جاري إطلاق البناء على السيرفر...",
+          content: "🚀 جاري تحميل القالب وإطلاق البناء على السيرفر...",
         });
 
-        // Create job in DB
+        // Load template files from the registry before creating the job
+        const templateId = currentDependencyGraph?.templateId;
+        let templateFilesForJob: any[] = [];
+        if (templateId && hasFullTemplate(templateId)) {
+          try {
+            const loaded = await loadTemplateFiles(templateId);
+            templateFilesForJob = loaded.map(f => ({
+              path: f.name,
+              name: f.name,
+              content: f.content,
+              language: f.language || (f.name.endsWith(".css") ? "css" : "tsx"),
+            }));
+            console.log(`[build] Loaded ${templateFilesForJob.length} template files for ${templateId}`);
+          } catch (err) {
+            console.error("[build] Failed to load template files:", err);
+          }
+        }
+
+        // Create job in DB with template files included
+        const jobDependencyGraph = {
+          ...currentDependencyGraph,
+          templateFiles: templateFilesForJob,
+        };
+
         const { data: newJob, error: jobErr } = await supabase
           .from("build_jobs")
           .insert({
             user_id: userId,
             prompt: buildPromptContent.slice(0, 500),
             build_prompt: buildPromptContent,
-            dependency_graph: currentDependencyGraph,
+            dependency_graph: jobDependencyGraph,
             status: "building_phase_1",
             current_phase: 0,
           })
