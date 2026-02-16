@@ -31,6 +31,12 @@ const FULL_TEMPLATE_IDS = new Set<string>([
   "real-estate-agency",
   "law-firm",
   "beauty-salon",
+  "gym-fitness",
+  "tech-company",
+  "education-academy",
+  "photography-portfolio",
+  "consulting-firm",
+  "personal-portfolio",
 ]);
 
 /** Check if a template has full pre-built code available */
@@ -64,6 +70,30 @@ export async function loadTemplateFiles(templateId: string): Promise<VFSFile[]> 
     case "beauty-salon": {
       const mod = await import("@/templates/beauty-salon");
       return mod.BEAUTY_SALON_TEMPLATE_FILES;
+    }
+    case "gym-fitness": {
+      const mod = await import("@/templates/gym-fitness");
+      return mod.GYM_FITNESS_TEMPLATE_FILES;
+    }
+    case "tech-company": {
+      const mod = await import("@/templates/tech-company");
+      return mod.TECH_COMPANY_TEMPLATE_FILES;
+    }
+    case "education-academy": {
+      const mod = await import("@/templates/education-academy");
+      return mod.EDUCATION_ACADEMY_TEMPLATE_FILES;
+    }
+    case "photography-portfolio": {
+      const mod = await import("@/templates/photography-portfolio");
+      return mod.PHOTOGRAPHY_PORTFOLIO_TEMPLATE_FILES;
+    }
+    case "consulting-firm": {
+      const mod = await import("@/templates/consulting-firm");
+      return mod.CONSULTING_FIRM_TEMPLATE_FILES;
+    }
+    case "personal-portfolio": {
+      const mod = await import("@/templates/personal-portfolio");
+      return mod.PERSONAL_PORTFOLIO_TEMPLATE_FILES;
     }
     default:
       return [];

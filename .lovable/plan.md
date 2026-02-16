@@ -47,8 +47,8 @@
 - [x] ecommerce-store ✅
 - [x] real-estate-agency, law-firm, beauty-salon ✅
 
-### المرحلة 3: القوالب 7-12
-- [ ] gym-fitness, tech-company, education-academy, photography-portfolio, consulting-firm, personal-portfolio
+### المرحلة 3: القوالب 7-12 ✅
+- [x] gym-fitness, tech-company, education-academy, photography-portfolio, consulting-firm, personal-portfolio ✅
 
 ### المرحلة 4: أدوات الإدارة
 - [ ] صفحة بناء القوالب (admin only)
