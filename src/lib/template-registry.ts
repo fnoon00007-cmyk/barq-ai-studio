@@ -28,6 +28,9 @@ const FULL_TEMPLATE_IDS = new Set<string>([
   "restaurant-luxury",
   "medical-clinic",
   "ecommerce-store",
+  "real-estate-agency",
+  "law-firm",
+  "beauty-salon",
 ]);
 
 /** Check if a template has full pre-built code available */
@@ -49,6 +52,18 @@ export async function loadTemplateFiles(templateId: string): Promise<VFSFile[]> 
     case "ecommerce-store": {
       const mod = await import("@/templates/ecommerce-store");
       return mod.ECOMMERCE_STORE_TEMPLATE_FILES;
+    }
+    case "real-estate-agency": {
+      const mod = await import("@/templates/real-estate-agency");
+      return mod.REAL_ESTATE_TEMPLATE_FILES;
+    }
+    case "law-firm": {
+      const mod = await import("@/templates/law-firm");
+      return mod.LAW_FIRM_TEMPLATE_FILES;
+    }
+    case "beauty-salon": {
+      const mod = await import("@/templates/beauty-salon");
+      return mod.BEAUTY_SALON_TEMPLATE_FILES;
     }
     default:
       return [];

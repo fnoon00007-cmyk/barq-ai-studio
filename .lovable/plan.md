@@ -45,7 +45,7 @@
 ### المرحلة 2: القوالب 2-6
 - [x] medical-clinic ✅
 - [x] ecommerce-store ✅
-- [ ] real-estate-agency, law-firm, beauty-salon
+- [x] real-estate-agency, law-firm, beauty-salon ✅
 
 ### المرحلة 3: القوالب 7-12
 - [ ] gym-fitness, tech-company, education-academy, photography-portfolio, consulting-firm, personal-portfolio
