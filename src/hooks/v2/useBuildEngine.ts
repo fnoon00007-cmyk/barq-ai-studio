@@ -209,7 +209,17 @@ export function useBuildEngine({
 
         // Build completed
         if (job.status === "completed") {
-          const allFiles = extractFilesFromJob(job);
+          // Realtime payload may truncate large JSON columns (phase_*_files).
+          // Re-fetch the full job row from the database to get all file data.
+          const { data: fullJob } = await supabase
+            .from("build_jobs")
+            .select("*")
+            .eq("id", job.id)
+            .single();
+
+          const jobData = fullJob || job;
+          const allFiles = extractFilesFromJob(jobData);
+          console.log("[realtime] Build completed, extracted", allFiles.length, "files");
           
           // Apply all files to VFS
           if (allFiles.length > 0) {

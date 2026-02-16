@@ -10,6 +10,8 @@ export function useBuilderProject(projectId: string | undefined) {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId || null);
   const [userId, setUserId] = useState<string | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savingRef = useRef(false);
+  const currentProjectIdRef = useRef<string | null>(projectId || null);
   const navigate = useNavigate();
 
   // Get user
@@ -23,6 +25,7 @@ export function useBuilderProject(projectId: string | undefined) {
   useEffect(() => {
     if (!projectId) return;
     setCurrentProjectId(projectId);
+    currentProjectIdRef.current = projectId;
     supabase
       .from("projects")
       .select("title, vfs_data")
@@ -48,32 +51,39 @@ export function useBuilderProject(projectId: string | undefined) {
   // Save project
   const saveProject = useCallback(async () => {
     if (!userId || files.length === 0) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
 
-    if (!currentProjectId) {
-      const { data, error } = await supabase
-        .from("projects")
-        .insert({
-          title: projectTitle,
-          user_id: userId,
-          status: "draft",
-          vfs_data: files as any,
-        })
-        .select("id")
-        .single();
+    try {
+      const pid = currentProjectIdRef.current;
+      if (!pid) {
+        const { data, error } = await supabase
+          .from("projects")
+          .insert({
+            title: projectTitle,
+            user_id: userId,
+            status: "draft",
+            vfs_data: files as any,
+          })
+          .select("id")
+          .single();
 
-      if (!error && data) {
-        setCurrentProjectId(data.id);
-        navigate(`/builder/${data.id}`, { replace: true });
-        toast.success("تم حفظ المشروع ⚡");
+        if (!error && data) {
+          setCurrentProjectId(data.id);
+          currentProjectIdRef.current = data.id;
+          navigate(`/builder/${data.id}`, { replace: true });
+          toast.success("تم حفظ المشروع ⚡");
+        }
+      } else {
+        await supabase
+          .from("projects")
+          .update({ vfs_data: files as any, updated_at: new Date().toISOString() })
+          .eq("id", pid);
       }
-    } else {
-      await supabase
-        .from("projects")
-        .update({ vfs_data: files as any, updated_at: new Date().toISOString() })
-        .eq("id", currentProjectId);
-      toast.success("تم حفظ المشروع ⚡");
+    } finally {
+      savingRef.current = false;
     }
-  }, [userId, files, currentProjectId, projectTitle, navigate]);
+  }, [userId, files, projectTitle, navigate]);
 
   // Auto-save
   useEffect(() => {
