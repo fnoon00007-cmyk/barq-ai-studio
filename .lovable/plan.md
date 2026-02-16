@@ -1,152 +1,64 @@
+# خطة تطوير BARQ: نظام القوالب الاحترافية (Template-Based Customization)
 
+## الهدف
+تحويل BARQ من "بناء من الصفر" إلى "تخصيص قوالب جاهزة" لتسريع البناء من ~6 دقائق إلى ~30-60 ثانية.
 
-# خطة تطوير محرك البناء: نظام الذكاء المزدوج (Gemini + Groq)
+## المعمارية
 
-## الفكرة
+### التخزين: ملفات ثابتة في الكود (`src/templates/`)
+كل قالب = ملف TypeScript يصدر مصفوفة VFSFile[] مع كود احترافي كامل.
 
-بدل ما نعتمد على موديل واحد (Groq/Llama) لكل شي (محادثة + بناء)، نفصل المهام:
+### سير العمل الجديد
+1. **المستخدم يختار قالب** → كود القالب يتحمل فوراً من `src/templates/`
+2. **المخطط (Planner)** → يحلل طلب المستخدم، يختار أقرب قالب، يحدد التعديلات
+3. **المنفذ (Builder)** → استدعاء AI واحد لتخصيص النصوص/الألوان/المحتوى فقط
+4. **النتيجة** → موقع احترافي في 30-60 ثانية
 
-- **جيميناي (المخطط)**: يتكلم مع المستخدم بالعربي، يفهم المتطلبات، يسأل أسئلة، ويجهز خطة مفصلة
-- **Groq (المنفذ)**: يستلم برومبت إنجليزي احترافي من جيميناي ويبني الكود مباشرة
+### القوالب الـ 12
+1. `restaurant-premium` - مطعم فاخر
+2. `clinic-advanced` - عيادة طبية
+3. `realestate-pro` - عقارات احترافي
+4. `ecommerce-full` - متجر إلكتروني
+5. `law-firm` - مكتب محاماة
+6. `salon-spa` - صالون تجميل
+7. `gym-fitness` - نادي رياضي
+8. `tech-startup` - شركة برمجيات
+9. `education` - أكاديمية تعليمية
+10. `photography` - مصور فوتوغرافي
+11. `consulting` - شركة استشارات
+12. `portfolio` - موقع شخصي
 
-## لماذا هذا أفضل؟
+## مراحل التنفيذ
 
-| الوضع الحالي | الوضع الجديد |
-|---|---|
-| Groq يسوي كل شي: محادثة + فهم + بناء | كل موديل يسوي اللي يبرع فيه |
-| البرومبت ضخم (محادثة + قواعد بناء) | كل موديل يستلم برومبت مركز |
-| Groq أحياناً يتجاهل قواعد المحادثة ويبني مباشرة | جيميناي ممتاز بالفهم والمحادثة، Groq يركز على الكود فقط |
-| موديل واحد يتحمل كل الضغط | توزيع الأحمال بين موديلين |
+### المرحلة 1: البنية التحتية + أول قالب
+- [x] كتابة الخطة
+- [ ] إنشاء `src/lib/template-registry.ts`
+- [ ] إنشاء `src/templates/restaurant-premium.ts`
+- [ ] تحديث `barq-planner` — أداة `customize_template`
+- [ ] تحديث `barq-build-worker` — وضع template customization
+- [ ] تحديث `barq-chat` — التعامل مع تخصيص القوالب
+- [ ] تحديث `useBuildEngine.ts` — مسار القوالب
+- [ ] تحديث `barq-api.ts` — دوال القوالب
+- [ ] تحديث `TemplatesPage.tsx` — تحميل مباشر
 
-## كيف يشتغل النظام؟
+### المرحلة 2: القوالب 2-6
+- [ ] clinic-advanced, realestate-pro, ecommerce-full, law-firm, salon-spa
 
-```text
-المستخدم
-    |
-    v
-[جيميناي - المخطط]
-    |-- يتكلم بالعربي
-    |-- يسأل سؤال واحد كل مرة
-    |-- يجمع: نوع النشاط، الاسم، التفاصيل
-    |-- يلخص ويطلب تأكيد
-    |
-    v (المستخدم يقول "ابدأ")
-    |
-[جيميناي يولد برومبت إنجليزي مفصل]
-    |-- يحول كل المتطلبات لبرومبت تقني
-    |-- يحدد الألوان، الأقسام، المحتوى
-    |
-    v
-[Groq - المنفذ]
-    |-- يستلم برومبت إنجليزي نظيف
-    |-- يبني الملفات (Header, Hero, Services...)
-    |-- يرجع الكود عبر tool calling
-    |
-    v
-[المعاينة جاهزة]
-```
+### المرحلة 3: القوالب 7-12
+- [ ] gym-fitness, tech-startup, education, photography, consulting, portfolio
 
-## التغييرات المطلوبة
-
-### 1. إنشاء Edge Function جديدة: `barq-planner`
-
-هذي الفنكشن تستخدم جيميناي (عبر Lovable AI Gateway) للمحادثة فقط:
-
-- **الموديل**: `google/gemini-3-flash-preview`
-- **المهمة**: محادثة عربية، فهم المتطلبات، سؤال واحد كل رد
-- **البرومبت**: مختصر ومركز على المحادثة فقط (بدون قواعد البناء الطويلة)
-- **أداة (tool)**: `prepare_build_prompt` - تُستدعى فقط لما المستخدم يوافق على البدء
-  - ترجع برومبت إنجليزي مفصل فيه كل المتطلبات
-- **Streaming**: نفس نظام SSE الحالي
-
-### 2. تعديل Edge Function الحالية: `barq-chat` تصير `barq-builder`
-
-تتحول لمنفذ فقط:
-- **الموديل**: `llama-3.3-70b-versatile` (Groq) - نفس الحالي
-- **المهمة**: يستلم برومبت إنجليزي جاهز ويبني الكود
-- **البرومبت**: قواعد البناء فقط (HTML/CSS/Tailwind) بدون أي محادثة
-- **أداة (tool)**: `generate_website` - نفس الحالية
-- **لا يتكلم مع المستخدم مباشرة** - يستلم الأوامر من النظام
-
-### 3. تعديل `src/lib/barq-api.ts`
-
-- إضافة دالة `streamBarqPlanner` للمحادثة مع جيميناي
-- تعديل `streamBarqAI` لتصير خاصة بالبناء فقط
-- إضافة event جديد: `build_ready` يحمل البرومبت الإنجليزي
-
-### 4. تعديل `src/pages/BuilderPage.tsx`
-
-- المحادثة العادية تروح لـ `barq-planner` (جيميناي)
-- لما جيميناي يرسل event `build_ready`:
-  1. يظهر للمستخدم ملخص الخطة
-  2. يظهر زر "ابدأ البناء"
-  3. عند الضغط: يرسل البرومبت الإنجليزي لـ `barq-builder` (Groq)
-  4. Groq يبني الملفات ويرسلها عبر SSE
-  5. تظهر رسالة "المعاينة جاهزة"
-
-## التفاصيل التقنية
-
-### ملف `supabase/functions/barq-planner/index.ts` (جديد)
-
-- يستخدم Lovable AI Gateway: `https://ai.gateway.lovable.dev/v1/chat/completions`
-- يستخدم `LOVABLE_API_KEY` (موجود تلقائياً)
-- موديل: `google/gemini-3-flash-preview`
-- برومبت النظام مختصر: شخصية برق + قواعد المحادثة فقط
-- أداة `prepare_build_prompt`:
-  - تستلم: نوع النشاط، الاسم، التفاصيل، الألوان، الأقسام المطلوبة
-  - ترجع: برومبت إنجليزي تقني مفصل + رسالة عربية للمستخدم
-- Streaming SSE بنفس format الحالي
-
-### ملف `supabase/functions/barq-chat/index.ts` (تعديل - يصير المنفذ)
-
-- يبقى يستخدم Groq API
-- البرومبت يتغير: قواعد بناء HTML/Tailwind فقط بالإنجليزي
-- يشيل كل قواعد المحادثة العربية
-- يستلم البرومبت الإنجليزي الجاهز من الفرونتند
-- يرجع الملفات عبر نفس نظام SSE
-
-### ملف `src/lib/barq-api.ts` (تعديل)
-
-- `streamBarqPlanner(messages, callbacks)` - يتصل بـ `barq-planner`
-  - callbacks جديد: `onBuildReady(prompt, summary)` - لما جيميناي يجهز البرومبت
-- `streamBarqBuilder(buildPrompt, callbacks)` - يتصل بـ `barq-chat` (المنفذ)
-  - يرسل البرومبت الإنجليزي مباشرة
-  - نفس callbacks الحالية (onFileStart, onFileDone, etc.)
-
-### ملف `src/pages/BuilderPage.tsx` (تعديل)
-
-- `handleSendMessage` يستخدم `streamBarqPlanner` بدل `streamBarqAI`
-- state جديد: `buildPrompt` و `buildSummary`
-- لما يجي event `build_ready`:
-  - يحفظ البرومبت في state
-  - يعرض الملخص للمستخدم في المحادثة
-  - يعرض زر "ابدأ البناء"
-- `handleStartBuild` - دالة جديدة:
-  - تاخذ `buildPrompt` وترسله لـ `streamBarqBuilder`
-  - تعرض خطوات التفكير والملفات
-  - لما يخلص تظهر رسالة "المعاينة جاهزة"
-
-### تسلسل الأحداث (SSE Events)
-
-**مرحلة التخطيط (جيميناي)**:
-- `message_delta` - رسائل المحادثة العربية
-- `build_ready` - البرومبت الإنجليزي جاهز (يحمل `prompt` + `summary`)
-
-**مرحلة البناء (Groq)**:
-- `thinking_start` / `thinking_step` - خطوات التفكير
-- `file_start` / `file_done` - الملفات
-- `message_delta` - رسالة النهاية
-- `done` - انتهى
+### المرحلة 4: أدوات الإدارة
+- [ ] صفحة بناء القوالب (admin only)
+- [ ] نظام معاينة القوالب
+- [ ] تحليلات القوالب
 
 ## الملفات المتأثرة
-
-1. `supabase/functions/barq-planner/index.ts` - **جديد** (Edge Function لجيميناي)
-2. `supabase/functions/barq-chat/index.ts` - **تعديل** (يصير منفذ فقط)
-3. `src/lib/barq-api.ts` - **تعديل** (إضافة دوال جديدة)
-4. `src/pages/BuilderPage.tsx` - **تعديل** (فصل مراحل التخطيط والبناء)
-
-## ملاحظات
-
-- `LOVABLE_API_KEY` موجود تلقائياً - ما نحتاج نطلب من المستخدم شي
-- `GROQ_API_KEY` موجود ومضاف مسبقاً
-- النظام الحالي للـ SSE والـ VFS ما يتغير - بس نضيف مرحلة قبله
+- **جديد**: `src/templates/restaurant-premium.ts` + باقي القوالب
+- **جديد**: `src/lib/template-registry.ts`
+- **تعديل**: `src/lib/templates-data.ts` (إضافة hasFullTemplate)
+- **تعديل**: `supabase/functions/barq-planner/index.ts`
+- **تعديل**: `supabase/functions/barq-build-worker/index.ts`
+- **تعديل**: `supabase/functions/barq-chat/index.ts`
+- **تعديل**: `src/hooks/v2/useBuildEngine.ts`
+- **تعديل**: `src/lib/barq-api.ts`
+- **تعديل**: `src/pages/TemplatesPage.tsx`
