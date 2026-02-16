@@ -43,7 +43,9 @@
 - [ ] تحديث `TemplatesPage.tsx` — تحميل مباشر
 
 ### المرحلة 2: القوالب 2-6
-- [ ] medical-clinic, real-estate-agency, ecommerce-store, law-firm, beauty-salon
+- [x] medical-clinic ✅
+- [x] ecommerce-store ✅
+- [ ] real-estate-agency, law-firm, beauty-salon
 
 ### المرحلة 3: القوالب 7-12
 - [ ] gym-fitness, tech-company, education-academy, photography-portfolio, consulting-firm, personal-portfolio
