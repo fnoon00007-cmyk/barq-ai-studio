@@ -96,14 +96,41 @@ export default function BuilderPage() {
     });
   }, [projectId, navigate]);
 
+  // Auto-create project when build starts and no project exists yet
+  const creatingProjectRef = useRef(false);
   useEffect(() => {
-    if (engine.state.buildProjectName) {
-      setProjectTitle(engine.state.buildProjectName);
-      if (currentProjectId) {
-        supabase.from("projects").update({ title: engine.state.buildProjectName }).eq("id", currentProjectId);
-      }
+    if (!engine.state.buildProjectName) return;
+    setProjectTitle(engine.state.buildProjectName);
+
+    if (currentProjectId) {
+      supabase.from("projects").update({ title: engine.state.buildProjectName }).eq("id", currentProjectId);
+      return;
     }
-  }, [engine.state.buildProjectName, currentProjectId]);
+
+    // Create new project in DB so VFS can save files
+    if (!userId || creatingProjectRef.current) return;
+    creatingProjectRef.current = true;
+
+    supabase
+      .from("projects")
+      .insert({
+        title: engine.state.buildProjectName,
+        user_id: userId,
+        status: "draft",
+      })
+      .select("id")
+      .single()
+      .then(({ data, error }) => {
+        creatingProjectRef.current = false;
+        if (!error && data) {
+          setCurrentProjectId(data.id);
+          navigate(`/builder/${data.id}`, { replace: true });
+          console.log("[builder] Auto-created project:", data.id);
+        } else {
+          console.error("[builder] Failed to create project:", error);
+        }
+      });
+  }, [engine.state.buildProjectName, currentProjectId, userId, navigate]);
 
   useEffect(() => {
     if (promptSentRef.current) return;
