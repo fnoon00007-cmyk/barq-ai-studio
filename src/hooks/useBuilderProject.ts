@@ -12,7 +12,13 @@ export function useBuilderProject(projectId: string | undefined) {
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
   const currentProjectIdRef = useRef<string | null>(projectId || null);
+  const filesRef = useRef<VFSFile[]>(files);
+  const projectTitleRef = useRef(projectTitle);
   const navigate = useNavigate();
+
+  // Keep refs in sync with latest state
+  useEffect(() => { filesRef.current = files; }, [files]);
+  useEffect(() => { projectTitleRef.current = projectTitle; }, [projectTitle]);
 
   // Get user
   useEffect(() => {
@@ -50,7 +56,8 @@ export function useBuilderProject(projectId: string | undefined) {
 
   // Save project
   const saveProject = useCallback(async () => {
-    if (!userId || files.length === 0) return;
+    const currentFiles = filesRef.current;
+    if (!userId || currentFiles.length === 0) return;
     if (savingRef.current) return;
     savingRef.current = true;
 
@@ -60,10 +67,10 @@ export function useBuilderProject(projectId: string | undefined) {
         const { data, error } = await supabase
           .from("projects")
           .insert({
-            title: projectTitle,
+            title: projectTitleRef.current,
             user_id: userId,
             status: "draft",
-            vfs_data: files as any,
+            vfs_data: currentFiles as any,
           })
           .select("id")
           .single();
@@ -77,13 +84,13 @@ export function useBuilderProject(projectId: string | undefined) {
       } else {
         await supabase
           .from("projects")
-          .update({ vfs_data: files as any, updated_at: new Date().toISOString() })
+          .update({ vfs_data: currentFiles as any, updated_at: new Date().toISOString() })
           .eq("id", pid);
       }
     } finally {
       savingRef.current = false;
     }
-  }, [userId, files, projectTitle, navigate]);
+  }, [userId, navigate]);
 
   // Auto-save
   useEffect(() => {
@@ -95,7 +102,7 @@ export function useBuilderProject(projectId: string | undefined) {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
-  }, [files, userId, saveProject]);
+  }, [files.length, userId, saveProject]);
 
   const handleLogout = useCallback(async () => {
     await supabase.auth.signOut();
