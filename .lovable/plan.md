@@ -9,56 +9,55 @@
 كل قالب = ملف TypeScript يصدر مصفوفة VFSFile[] مع كود احترافي كامل.
 
 ### سير العمل الجديد
-1. **المستخدم يختار قالب** → كود القالب يتحمل فوراً من `src/templates/`
-2. **المخطط (Planner)** → يحلل طلب المستخدم، يختار أقرب قالب، يحدد التعديلات
-3. **المنفذ (Builder)** → استدعاء AI واحد لتخصيص النصوص/الألوان/المحتوى فقط
-4. **النتيجة** → موقع احترافي في 30-60 ثانية
+1. **المستخدم يكتب طلبه** → المخطط يحلل ويختار القالب
+2. **المخطط (Planner)** → يستدعي `customize_template` مع template_id + modifications
+3. **Frontend** → يحمل ملفات القالب من `src/templates/` ويرسلها لـ barq-chat
+4. **المنفذ (Builder/Chat)** → AI يخصص النصوص/الألوان/المحتوى فقط
+5. **النتيجة** → موقع احترافي في 30-60 ثانية
 
 ### القوالب الـ 12
-1. `restaurant-premium` - مطعم فاخر
-2. `clinic-advanced` - عيادة طبية
-3. `realestate-pro` - عقارات احترافي
-4. `ecommerce-full` - متجر إلكتروني
+1. `restaurant-luxury` - مطعم فاخر
+2. `medical-clinic` - عيادة طبية
+3. `real-estate-agency` - عقارات
+4. `ecommerce-store` - متجر إلكتروني
 5. `law-firm` - مكتب محاماة
-6. `salon-spa` - صالون تجميل
+6. `beauty-salon` - صالون تجميل
 7. `gym-fitness` - نادي رياضي
-8. `tech-startup` - شركة برمجيات
-9. `education` - أكاديمية تعليمية
-10. `photography` - مصور فوتوغرافي
-11. `consulting` - شركة استشارات
-12. `portfolio` - موقع شخصي
+8. `tech-company` - شركة برمجيات
+9. `education-academy` - أكاديمية تعليمية
+10. `photography-portfolio` - مصور فوتوغرافي
+11. `consulting-firm` - شركة استشارات
+12. `personal-portfolio` - موقع شخصي
 
 ## مراحل التنفيذ
 
-### المرحلة 1: البنية التحتية + أول قالب
+### المرحلة 1: البنية التحتية + أول قالب ✅
 - [x] كتابة الخطة
-- [ ] إنشاء `src/lib/template-registry.ts`
-- [ ] إنشاء `src/templates/restaurant-premium.ts`
-- [ ] تحديث `barq-planner` — أداة `customize_template`
-- [ ] تحديث `barq-build-worker` — وضع template customization
-- [ ] تحديث `barq-chat` — التعامل مع تخصيص القوالب
-- [ ] تحديث `useBuildEngine.ts` — مسار القوالب
-- [ ] تحديث `barq-api.ts` — دوال القوالب
+- [x] إنشاء `src/lib/template-registry.ts`
+- [x] إنشاء `src/templates/restaurant-premium.ts`
+- [x] تحديث `barq-planner` — أداة `customize_template` بدل `prepare_build_prompt`
+- [x] تحديث `barq-chat` — وضع template customization + modification mode
+- [x] تحديث `barq-build-worker` — بناء قالب في pass واحد
+- [x] تحديث `useBuildEngine.ts` — مسار القوالب مع loadTemplateFiles
+- [x] تحديث `barq-api.ts` — إضافة `streamBarqTemplateCustomize`
 - [ ] تحديث `TemplatesPage.tsx` — تحميل مباشر
 
 ### المرحلة 2: القوالب 2-6
-- [ ] clinic-advanced, realestate-pro, ecommerce-full, law-firm, salon-spa
+- [ ] medical-clinic, real-estate-agency, ecommerce-store, law-firm, beauty-salon
 
 ### المرحلة 3: القوالب 7-12
-- [ ] gym-fitness, tech-startup, education, photography, consulting, portfolio
+- [ ] gym-fitness, tech-company, education-academy, photography-portfolio, consulting-firm, personal-portfolio
 
 ### المرحلة 4: أدوات الإدارة
 - [ ] صفحة بناء القوالب (admin only)
 - [ ] نظام معاينة القوالب
-- [ ] تحليلات القوالب
 
 ## الملفات المتأثرة
 - **جديد**: `src/templates/restaurant-premium.ts` + باقي القوالب
 - **جديد**: `src/lib/template-registry.ts`
-- **تعديل**: `src/lib/templates-data.ts` (إضافة hasFullTemplate)
-- **تعديل**: `supabase/functions/barq-planner/index.ts`
-- **تعديل**: `supabase/functions/barq-build-worker/index.ts`
-- **تعديل**: `supabase/functions/barq-chat/index.ts`
-- **تعديل**: `src/hooks/v2/useBuildEngine.ts`
-- **تعديل**: `src/lib/barq-api.ts`
-- **تعديل**: `src/pages/TemplatesPage.tsx`
+- **تعديل**: `src/lib/templates-data.ts`
+- **تعديل**: `supabase/functions/barq-planner/index.ts` ← customize_template tool
+- **تعديل**: `supabase/functions/barq-chat/index.ts` ← template_files mode
+- **تعديل**: `supabase/functions/barq-build-worker/index.ts` ← single-pass template
+- **تعديل**: `src/hooks/useBuildEngine.ts` ← template loading + customization flow
+- **تعديل**: `src/lib/barq-api.ts` ← streamBarqTemplateCustomize

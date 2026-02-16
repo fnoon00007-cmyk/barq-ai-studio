@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef } from "react";
-import { streamBarqPlanner, streamBarqBuilder, reviewBuild } from "@/lib/barq-api";
+import { streamBarqPlanner, streamBarqBuilder, streamBarqTemplateCustomize, reviewBuild } from "@/lib/barq-api";
 import { ChatMessage, ThinkingStep, ActivityLogEntry } from "@/hooks/useVFS";
 import { VFSFile } from "@/hooks/useVFS";
+import { loadTemplateFiles, hasFullTemplate } from "@/lib/template-registry";
 import { toast } from "sonner";
 
 interface UseBuildEngineProps {
@@ -31,6 +32,8 @@ export function useBuildEngine({
   const [isBuilding, setIsBuilding] = useState(false);
   const [buildPrompt, setBuildPrompt] = useState<string | null>(null);
   const [buildProjectName, setBuildProjectName] = useState<string | null>(null);
+  const [buildTemplateId, setBuildTemplateId] = useState<string | null>(null);
+  const [buildModifications, setBuildModifications] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -70,75 +73,66 @@ export function useBuildEngine({
       }, 120_000);
 
       try {
-        await streamBarqBuilder(
-          { buildPrompt: prompt, projectId: null, dependencyGraph: null, existingFiles: files.map(f => ({ path: f.name || (f as any).path, content: f.content })) },
-          {
-            onThinkingStart: () => addLogEntry("read", "تحليل وتخطيط البناء..."),
-            onThinkingStep: (step) => {
-              const newStep: ThinkingStep = { id: String(thinkingSteps.length), label: step, status: "completed" };
-              thinkingSteps.push(newStep);
-              updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
-            },
-            onFileStart: (path, action) => {
-              addLogEntry(action === "create" ? "create" : "update", `${action === "create" ? "إنشاء" : "تحديث"} ${path}...`);
-              if (!affectedFiles.includes(path)) affectedFiles.push(path);
-              updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
-            },
-            onFileChunk: (path, chunk) => {
-              // The edge function sends full content in file_chunk, accumulate it
-              const existing = pendingOps.find(op => op.path === path);
-              if (existing) {
-                existing.content += chunk;
-              } else {
-                pendingOps.push({ path, action: "create", content: chunk, language: path.endsWith(".css") ? "css" : "tsx" });
-              }
-            },
-            onFileDone: (path, fileContent) => {
-              // Also handle file_done if sent
-              const existing = pendingOps.find(op => op.path === path);
-              if (existing) {
-                existing.content = fileContent;
-              } else {
-                pendingOps.push({ path, action: "create", content: fileContent, language: path.endsWith(".css") ? "css" : "tsx" });
-              }
-            },
-            onMessageDelta: (text) => {
-              assistantContent += text;
-              updateMessage(assistantMsgId, { content: assistantContent });
-            },
-            onDone: async () => {
-              if (pendingOps.length > 0) {
-                applyVFSOperations(pendingOps);
-                updateMessage(assistantMsgId, { isStreaming: false });
+        // Determine build mode: template-based or modification
+        const useTemplate = buildTemplateId && hasFullTemplate(buildTemplateId);
 
-                // === REVIEW PHASE ===
-                setReviewStatus("reviewing");
-                addLogEntry("read", "مراجعة الملفات بواسطة المدير (Gemini)...");
-                try {
-                  const reviewResult = await reviewBuild(prompt, pendingOps);
-                  if (reviewResult.status === "approved") {
-                    setReviewStatus("approved");
-                    addLogEntry("complete", "✅ تمت المراجعة — الموقع مكتمل!");
-                    toast.success("تمت المراجعة بنجاح! الموقع مكتمل ⚡");
-                  } else {
-                    setReviewStatus("fixing");
-                    addLogEntry("update", `🔧 تم اكتشاف ${reviewResult.issues.length} مشكلة — جاري الإصلاح...`);
-                    
-                    const reviewMsgId = crypto.randomUUID();
-                    addMessage({
-                      id: reviewMsgId,
-                      role: "assistant",
-                      content: `🔍 مراجعة المدير:\n${reviewResult.summary_ar}\n\nجاري إصلاح ${reviewResult.issues.length} مشكلة تلقائياً...`,
-                      timestamp: new Date(),
-                    });
+        const streamCallbacks = {
+          onThinkingStart: () => addLogEntry("read", "تحليل وتخطيط البناء..."),
+          onThinkingStep: (step: string) => {
+            const newStep: ThinkingStep = { id: String(thinkingSteps.length), label: step, status: "completed" };
+            thinkingSteps.push(newStep);
+            updateMessage(assistantMsgId, { thinkingSteps: [...thinkingSteps] });
+          },
+          onFileStart: (path: string, action: string) => {
+            addLogEntry(action === "create" ? "create" : "update", `${action === "create" ? "إنشاء" : "تحديث"} ${path}...`);
+            if (!affectedFiles.includes(path)) affectedFiles.push(path);
+            updateMessage(assistantMsgId, { affectedFiles: [...affectedFiles] });
+          },
+          onFileChunk: (path: string, chunk: string) => {
+            const existing = pendingOps.find(op => op.path === path);
+            if (existing) { existing.content += chunk; }
+            else { pendingOps.push({ path, action: "create", content: chunk, language: path.endsWith(".css") ? "css" : "tsx" }); }
+          },
+          onFileDone: (path: string, fileContent: string) => {
+            const existing = pendingOps.find(op => op.path === path);
+            if (existing) { existing.content = fileContent; }
+            else { pendingOps.push({ path, action: "create", content: fileContent, language: path.endsWith(".css") ? "css" : "tsx" }); }
+          },
+          onMessageDelta: (text: string) => {
+            assistantContent += text;
+            updateMessage(assistantMsgId, { content: assistantContent });
+          },
+          onDone: async () => {
+            if (pendingOps.length > 0) {
+              applyVFSOperations(pendingOps);
+              updateMessage(assistantMsgId, { isStreaming: false });
 
-                    if (reviewResult.fix_prompt) {
-                      const fixPrompt = `${prompt}\n\n## FIX INSTRUCTIONS:\n${reviewResult.fix_prompt}\n\n## EXISTING FILES:\n${pendingOps.map(f => `- ${f.path}`).join("\n")}\n\nFix the issues and regenerate ONLY the affected files.`;
-                      
-                      const fixOps: typeof pendingOps = [];
-                      await streamBarqBuilder(
-                        { buildPrompt: fixPrompt, projectId: null, dependencyGraph: null, existingFiles: pendingOps.map(f => ({ path: f.path, content: f.content })) },
-                        {
+              // === REVIEW PHASE ===
+              setReviewStatus("reviewing");
+              addLogEntry("read", "مراجعة الملفات...");
+              try {
+                const reviewResult = await reviewBuild(prompt, pendingOps);
+                if (reviewResult.status === "approved") {
+                  setReviewStatus("approved");
+                  addLogEntry("complete", "✅ تمت المراجعة — الموقع مكتمل!");
+                  toast.success("تمت المراجعة بنجاح! الموقع مكتمل ⚡");
+                } else {
+                  setReviewStatus("fixing");
+                  addLogEntry("update", `🔧 تم اكتشاف ${reviewResult.issues.length} مشكلة — جاري الإصلاح...`);
+                  
+                  const reviewMsgId = crypto.randomUUID();
+                  addMessage({
+                    id: reviewMsgId,
+                    role: "assistant",
+                    content: `🔍 مراجعة:\n${reviewResult.summary_ar}\n\nجاري إصلاح ${reviewResult.issues.length} مشكلة تلقائياً...`,
+                    timestamp: new Date(),
+                  });
+
+                  if (reviewResult.fix_prompt) {
+                    const fixOps: typeof pendingOps = [];
+                    await streamBarqBuilder(
+                      { buildPrompt: reviewResult.fix_prompt, projectId: null, dependencyGraph: null, existingFiles: pendingOps.map(f => ({ path: f.path, content: f.content })) },
+                      {
                         onFileStart: (path) => addLogEntry("update", `إصلاح ${path}...`),
                         onFileChunk: (path, chunk) => {
                           const existing = fixOps.find(op => op.path === path);
@@ -151,32 +145,60 @@ export function useBuildEngine({
                           else { fixOps.push({ path, action: "update", content, language: path.endsWith(".css") ? "css" : "tsx" }); }
                         },
                         onDone: () => {
-                          if (fixOps.length > 0) {
-                            applyVFSOperations(fixOps);
-                          }
+                          if (fixOps.length > 0) applyVFSOperations(fixOps);
                           setReviewStatus("approved");
                           addLogEntry("complete", "✅ تم الإصلاح — الموقع مكتمل!");
                           toast.success("تم إصلاح المشاكل! الموقع مكتمل ⚡");
                         },
-                      });
-                    }
+                      }
+                    );
                   }
-                } catch (reviewErr) {
-                  console.error("Review error:", reviewErr);
-                  setReviewStatus(null);
                 }
-
-                toast("المعاينة جاهزة! ⚡", {
-                  description: "تم بناء موقعك بنجاح",
-                  action: { label: "انتقل للمعاينة", onClick: () => setMobileView("preview") },
-                  duration: 10000,
-                });
+              } catch (reviewErr) {
+                console.error("Review error:", reviewErr);
+                setReviewStatus(null);
               }
-              updateMessage(assistantMsgId, { isStreaming: false });
-            },
+
+              toast("المعاينة جاهزة! ⚡", {
+                description: "تم بناء موقعك بنجاح",
+                action: { label: "انتقل للمعاينة", onClick: () => setMobileView("preview") },
+                duration: 10000,
+              });
+            }
+            updateMessage(assistantMsgId, { isStreaming: false });
           },
-          abortController.signal
-        );
+        };
+
+        if (useTemplate) {
+          // TEMPLATE-BASED BUILD: load template files and send for customization
+          addLogEntry("read", `تحميل قالب ${buildTemplateId}...`);
+          const templateFiles = await loadTemplateFiles(buildTemplateId!);
+          
+          if (templateFiles.length === 0) {
+            throw new Error("فشل تحميل القالب");
+          }
+
+          addLogEntry("read", `تم تحميل ${templateFiles.length} ملف — جاري التخصيص...`);
+          
+          await streamBarqTemplateCustomize(
+            {
+              buildPrompt: prompt,
+              templateFiles: templateFiles.map(f => ({ path: f.name, content: f.content })),
+              modifications: buildModifications,
+              projectId: null,
+            },
+            streamCallbacks,
+            abortController.signal
+          );
+        } else {
+          // MODIFICATION MODE: modify existing files
+          await streamBarqBuilder(
+            { buildPrompt: prompt, projectId: null, dependencyGraph: null, existingFiles: files.map(f => ({ path: f.name || (f as any).path, content: f.content })) },
+            streamCallbacks,
+            abortController.signal
+          );
+        }
+
         saveMessage("assistant", assistantContent);
         if (pendingOps.length > 0) setTimeout(() => saveProject(), 500);
       } catch (err: any) {
@@ -198,10 +220,12 @@ export function useBuildEngine({
         clearTimeout(safetyTimeout);
         setIsThinking(false);
         setIsBuilding(false);
+        setBuildTemplateId(null);
+        setBuildModifications(null);
         abortControllerRef.current = null;
       }
     },
-    [addLogEntry, applyVFSOperations, saveMessage, saveProject, addMessage, updateMessage, files, setMobileView, isBuilding]
+    [addLogEntry, applyVFSOperations, saveMessage, saveProject, addMessage, updateMessage, files, setMobileView, isBuilding, buildTemplateId, buildModifications]
   );
 
   const handleSendMessage = useCallback(
@@ -253,11 +277,11 @@ export function useBuildEngine({
               assistantContent += text;
               updateMessage(assistantMsgId, { content: assistantContent });
             },
-            onBuildReady: (prompt, summary, projectName) => {
+            onBuildReady: (prompt, summary, projectName, _depGraph, templateId, modifications) => {
               setBuildPrompt(prompt);
-              if (projectName) {
-                setBuildProjectName(projectName);
-              }
+              if (projectName) setBuildProjectName(projectName);
+              if (templateId) setBuildTemplateId(templateId);
+              if (modifications) setBuildModifications(modifications);
               return projectName;
             },
             onDone: () => {
@@ -296,6 +320,7 @@ export function useBuildEngine({
     isBuilding,
     buildPrompt,
     buildProjectName,
+    buildTemplateId,
     reviewStatus,
     handleAbort,
     handleStartBuild,

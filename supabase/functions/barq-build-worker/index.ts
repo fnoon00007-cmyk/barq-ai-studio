@@ -7,74 +7,52 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ─── BUILD PHASES ───
-const BUILD_PHASES = [
-  { id: 1, label: "الأساس", labelEn: "Foundation", files: ["styles.css", "App.tsx", "Header.tsx"],
-    description: "Generate ONLY these 3 files: styles.css (CSS variables + keyframe animations, 80+ lines), App.tsx (main layout wrapper, 30+ lines), Header.tsx (sticky nav with glass effect + mobile menu, 250+ lines)" },
-  { id: 2, label: "المحتوى الرئيسي", labelEn: "Main Content", files: ["Hero.tsx", "Services.tsx", "About.tsx"],
-    description: "Generate ONLY these 3 files: Hero.tsx (full-screen hero, 300+ lines), Services.tsx (6-9 service cards, 300+ lines), About.tsx (2-column layout, 250+ lines)" },
-  { id: 3, label: "التفاعل", labelEn: "Engagement", files: ["Stats.tsx", "Testimonials.tsx", "CTA.tsx"],
-    description: "Generate ONLY these 3 files: Stats.tsx (stat counters, 200+ lines), Testimonials.tsx (testimonial cards, 250+ lines), CTA.tsx (gradient section, 200+ lines)" },
-  { id: 4, label: "الإغلاق", labelEn: "Closing", files: ["Contact.tsx", "Footer.tsx"],
-    description: "Generate ONLY these 2 files: Contact.tsx (form + contact info, 300+ lines), Footer.tsx (footer columns, 250+ lines)" },
-];
+// ─── TEMPLATE CUSTOMIZATION PROMPT ───
+const TEMPLATE_CUSTOMIZER_PROMPT = [
+  'You are "Barq Template Customizer" — an expert at modifying pre-built Arabic RTL website templates.',
+  '',
+  '## YOUR JOB:',
+  'Take a COMPLETE, PROFESSIONAL template and apply PRECISE customizations.',
+  '',
+  '## STRICT RULES:',
+  '1. You receive complete template files — DO NOT rewrite from scratch',
+  '2. ONLY modify what the modifications object specifies',
+  '3. PRESERVE the template structure, animations, layout, and professional quality',
+  '4. ALL text MUST remain in Arabic',
+  '5. Keep the EXACT same number of lines (+-10%)',
+  '6. MUST call generate_website tool with ALL template files (modified)',
+  '7. Return COMPLETE file contents, not diffs',
+].join('\n');
 
-// ─── Arabic content examples per phase ───
-const ARABIC_EXAMPLES: Record<number, string> = {
-  1: [
-    '## MANDATORY ARABIC TEXT FOR Header.tsx:',
-    '- Nav: "الرئيسية" | "خدماتنا" | "من نحن" | "آراء العملاء" | "تواصل معنا"',
-    '- CTA: "احصل على استشارة مجانية" - Mobile: "القائمة"',
-  ].join('\n'),
-  2: [
-    '## MANDATORY ARABIC TEXT:',
-    '- Hero heading: "نصنع تجارب رقمية استثنائية تُلهم النجاح"',
-    '- Hero sub: "شريكك الموثوق في التحول الرقمي منذ أكثر من ١٥ عاماً"',
-    '- Stats: "+٥٠٠ مشروع ناجح" | "+١٥ سنة خبرة" | "+٩٨% رضا العملاء"',
-    '- Services title: "خدماتنا المميزة" — 6 services with Arabic titles/descriptions',
-    '- About title: "من نحن" — features: "فريق محترف" | "حلول مبتكرة" | "دعم متواصل"',
-  ].join('\n'),
-  3: [
-    '## MANDATORY ARABIC TEXT:',
-    '- Stats title: "إنجازاتنا بالأرقام" — labels: "مشروع مكتمل" | "سنة خبرة" | "رضا العملاء"',
-    '- Testimonials title: "ماذا يقول عملاؤنا" — 3 testimonials with full Arabic text',
-    '- Names: "م. أحمد الشهري" | "أ. نورة القحطاني" | "د. فهد العتيبي"',
-    '- CTA: "مستعد لبدء مشروعك القادم؟" buttons: "تواصل معنا الآن" | "اطلب عرض سعر"',
-  ].join('\n'),
-  4: [
-    '## MANDATORY ARABIC TEXT:',
-    '- Contact title: "تواصل معنا" — labels: "الاسم الكامل" | "البريد الإلكتروني" | "رقم الجوال"',
-    '- Placeholders: "أدخل اسمك" | "+٩٦٦ ٥٠ ٠٠٠ ٠٠٠٠" — submit: "إرسال الرسالة"',
-    '- Footer: "عن الشركة" | "روابط سريعة" | "خدماتنا" | "تواصل معنا"',
-    '- Newsletter: "اشترك في نشرتنا البريدية" — copyright: "جميع الحقوق محفوظة © ٢٠٢٤"',
-  ].join('\n'),
-};
+function sseEvent(data: Record<string, unknown>): string {
+  return "data: " + JSON.stringify(data) + "\n\n";
+}
 
-function getPhaseSystemPrompt(phase: typeof BUILD_PHASES[number], cssVars?: string): string {
-  return [
-    'You are "Barq Builder Pro" — elite frontend architect.',
-    '',
-    '# ⛔ RULE #1: ALL TEXT MUST BE ARABIC — ZERO English in visible text',
-    '# ⛔ RULE #2: MINIMUM 200 LINES PER .tsx COMPONENT',
-    '# ⛔ RULE #3: MUST call generate_website tool',
-    '',
-    '- RTL direction, font-family: "Cairo", sans-serif',
-    '- Tailwind CSS ONLY, SVG inline icons, no external images',
-    '- No import/export — raw JSX only',
-    '- Every element: hover + focus + active states',
-    '- 3+ decorative background elements per section',
-    '',
-    ARABIC_EXAMPLES[phase.id] || '',
-    '',
-    `## PHASE ${phase.id}/4: "${phase.labelEn}" — Generate EXACTLY: ${phase.files.join(", ")}`,
-    phase.description,
-    `⚠️ ALL ${phase.files.length} files MUST be generated. Each .tsx 200+ lines.`,
-    '',
-    cssVars ? `## CSS VARS:\n${cssVars}\n` : '',
-    phase.id === 1 ? '## styles.css: 80+ lines with CSS vars + 6+ @keyframes\n## App.tsx: <div dir="rtl" lang="ar"> wrapper' : '',
-    '',
-    '## DESIGN: Hero text-5xl+, sections py-24 md:py-32, cards rounded-3xl hover:shadow-2xl hover:-translate-y-2, glass bg-white/80 backdrop-blur-xl',
-  ].join('\n');
+// ─── MULTI-KEY ROTATION ───
+const AI_CALL_TIMEOUT = 90_000;
+
+async function tryKeys(keys: string[], url: string, body: string, label: string): Promise<Response | null> {
+  for (const key of keys) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), AI_CALL_TIMEOUT);
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) { console.log(label + " ok"); return res; }
+      if (res.status === 429) { console.warn(label + " 429, next..."); continue; }
+      console.error(label + " error:", res.status);
+      continue;
+    } catch (err) {
+      console.warn(label + " timeout/error:", err instanceof Error ? err.message : err);
+      continue;
+    }
+  }
+  return null;
 }
 
 // ─── Collect streamed tool call ───
@@ -107,150 +85,46 @@ async function collectStreamedToolCall(response: Response): Promise<string> {
   return toolCallArgs;
 }
 
-// ─── Delay helper ───
-function delay(ms: number) { return new Promise(r => setTimeout(r, ms)); }
-
-// ─── Try multiple API keys with per-request timeout ───
-const AI_CALL_TIMEOUT = 45_000; // 45 seconds per provider attempt (optimized from 120s)
-
-async function tryKeys(keys: string[], url: string, body: string, label: string): Promise<Response | null> {
-  for (const key of keys) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), AI_CALL_TIMEOUT);
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
-        body,
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (res.ok) { console.log(label + " ok"); return res; }
-      if (res.status === 429) { console.warn(label + " 429, next..."); continue; }
-      console.error(label + " error:", res.status);
-      continue;
-    } catch (err) {
-      console.warn(label + " timeout/error:", err instanceof Error ? err.message : err);
-      continue;
-    }
-  }
-  return null;
-}
-
-// ─── Pre-Generation Validation ───
-const REQUIRED_LINES: Record<string, number> = {
-  'Header.tsx': 250, 'Hero.tsx': 300, 'Services.tsx': 300, 'About.tsx': 250,
-  'Stats.tsx': 200, 'Testimonials.tsx': 250, 'CTA.tsx': 150, 'Contact.tsx': 300,
-  'Footer.tsx': 250, 'styles.css': 80, 'App.tsx': 50,
-};
-
-function validateGeneratedFiles(result: any): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-  const ops = result?.vfs_operations;
-  if (!Array.isArray(ops) || ops.length === 0) return { valid: false, errors: ['لم يتم توليد أي ملفات'] };
-
-  for (const op of ops) {
-    const content = op.content || '';
-    const lines = content.split('\n').length;
-    const required = REQUIRED_LINES[op.path];
-    if (required && lines < required) errors.push(`${op.path}: ${lines} سطر (المطلوب ${required}+)`);
-
-    if (op.path.endsWith('.tsx')) {
-      const arabicChars = (content.match(/[\u0600-\u06FF]/g) || []).length;
-      const totalChars = content.replace(/\s/g, '').length;
-      if (totalChars > 0 && arabicChars / totalChars < 0.10) {
-        errors.push(`${op.path}: نسبة العربي ${Math.round((arabicChars / totalChars) * 100)}% (المطلوب 10%+)`);
-      }
-    }
-
-    for (const pattern of ['// TODO', '// Add content', '// ...', '// rest of code', 'placeholder']) {
-      if (content.includes(pattern)) errors.push(`${op.path}: يحتوي على "${pattern}"`);
-    }
-  }
-  return { valid: errors.length === 0, errors };
-}
-
-// ─── Call AI for a single phase with retry + validation + early termination ───
-const MAX_RETRIES = 3;
-const RETRY_DELAYS = [10000, 20000, 40000];
-const MAX_VALIDATION_RETRIES = 1;
-
-async function callAIForPhase(
+// ─── Call AI ───
+async function callAI(
   messages: Array<{role: string; content: string}>,
   toolsDef: any[],
   geminiKeys: string[], groqKeys: string[], lovableKey: string | undefined
 ): Promise<any | null> {
+  const bodyBase = {
+    messages,
+    stream: true,
+    max_tokens: 32768,
+    temperature: 0.3,
+    tools: toolsDef,
+    tool_choice: { type: "function", function: { name: "generate_website" } },
+  };
 
-  async function doCall(msgs: Array<{role: string; content: string}>): Promise<any | null> {
-    const geminiBody = JSON.stringify({ model: "gemini-2.5-flash", messages: msgs, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
-    const groqBody = JSON.stringify({ model: "llama-3.3-70b-versatile", messages: msgs, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
+  let response: Response | null = null;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        const waitMs = RETRY_DELAYS[attempt - 1] || 40000;
-        console.log(`[retry] Attempt ${attempt + 1}/${MAX_RETRIES + 1} — waiting ${waitMs / 1000}s...`);
-        await delay(waitMs);
-      }
+  response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    JSON.stringify({ ...bodyBase, model: "gemini-2.5-flash" }), "Gemini");
 
-      let response = await tryKeys(geminiKeys, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", geminiBody, "Gemini");
-      if (!response) response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions", groqBody, "Groq");
-      if (!response && lovableKey) {
-        const lb = JSON.stringify({ model: "google/gemini-2.5-flash", messages: msgs, stream: true, max_tokens: 16384, temperature: 0.5, tools: toolsDef, tool_choice: { type: "function", function: { name: "generate_website" } } });
-        const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", { method: "POST", headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" }, body: lb });
-        if (res.ok) response = res;
-      }
-
-      if (response) {
-        const args = await collectStreamedToolCall(response);
-        if (args) {
-          try {
-            const parsed = JSON.parse(args);
-            if (parsed?.vfs_operations?.length > 0) {
-              console.log(`[callAI] ✅ Got ${parsed.vfs_operations.length} files`);
-              return parsed;
-            }
-          } catch { console.error("[parse] Failed to parse tool call args"); }
-        }
-        console.warn("[stream] No valid tool call args, retrying...");
-        continue;
-      }
-      console.warn(`[retry] All providers failed on attempt ${attempt + 1}`);
-    }
-    return null;
+  if (!response) {
+    response = await tryKeys(groqKeys, "https://api.groq.com/openai/v1/chat/completions",
+      JSON.stringify({ ...bodyBase, model: "llama-3.3-70b-versatile" }), "Groq");
   }
 
-  // First attempt
-  let result = await doCall(messages);
-  if (!result) return null;
-
-  // Validate
-  const validation = validateGeneratedFiles(result);
-  if (validation.valid) {
-    console.log('✅ Validation PASSED');
-    return result;
+  if (!response && lovableKey) {
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + lovableKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...bodyBase, model: "google/gemini-2.5-flash" }),
+    });
+    if (res.ok) response = res;
   }
 
-  console.warn('❌ Validation FAILED:', validation.errors);
+  if (!response) return null;
 
-  // Retry with correction prompt
-  for (let retry = 0; retry < MAX_VALIDATION_RETRIES; retry++) {
-    console.log(`🔄 Validation retry ${retry + 1}/${MAX_VALIDATION_RETRIES}...`);
-    const retryPrompt = [
-      '❌ VALIDATION FAILED — YOUR PREVIOUS OUTPUT WAS REJECTED.',
-      'Issues:', ...validation.errors.map(e => '- ' + e),
-      '', 'REGENERATE with 200-500 lines per component, 10%+ Arabic, NO placeholders.',
-    ].join('\n');
+  const args = await collectStreamedToolCall(response);
+  if (!args) return null;
 
-    result = await doCall([...messages, { role: 'assistant', content: 'I will regenerate.' }, { role: 'user', content: retryPrompt }]);
-    if (!result) return null;
-
-    const rv = validateGeneratedFiles(result);
-    if (rv.valid) { console.log('✅ Validation PASSED on retry'); return result; }
-    console.warn('❌ Still failed on retry:', rv.errors);
-  }
-
-  console.warn('⚠️ Returning result despite validation failures');
-  return result;
+  try { return JSON.parse(args); } catch { return null; }
 }
 
 // ─── MAIN HANDLER ───
@@ -262,11 +136,11 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, serviceKey);
 
   try {
-    const { job_id, phase_number } = await req.json();
-    if (!job_id || !phase_number) throw new Error("job_id and phase_number required");
+    const { job_id } = await req.json();
+    if (!job_id) throw new Error("job_id required");
 
-    console.log(`[worker] Job ${job_id} — Phase ${phase_number}`);
-    const phaseStartTime = Date.now();
+    console.log(`[worker] Job ${job_id}`);
+    const startTime = Date.now();
 
     // Load job from DB
     const { data: job, error: jobErr } = await supabase
@@ -282,78 +156,11 @@ serve(async (req) => {
       });
     }
 
-    const phaseNum = phase_number as number;
-    if (phaseNum < 1 || phaseNum > 4) throw new Error("Invalid phase: " + phaseNum);
-
-    const currentPhase = BUILD_PHASES[phaseNum - 1];
-
     // Update status
     await supabase.from("build_jobs").update({
-      status: `building_phase_${phaseNum}`,
-      current_phase: phaseNum,
+      status: "building_template",
+      current_phase: 1,
     }).eq("id", job_id);
-
-    // Gather existing files from previous phases
-    const existingFiles: { path: string; content: string }[] = [];
-    for (let i = 1; i < phaseNum; i++) {
-      const phaseFiles = (job as any)[`phase_${i}_files`];
-      if (Array.isArray(phaseFiles)) {
-        for (const f of phaseFiles) {
-          existingFiles.push({ path: f.name || f.path, content: f.content });
-        }
-      }
-    }
-
-    // Get CSS vars context for phases 2+
-    let cssVars = "";
-    if (phaseNum > 1) {
-      const cssFile = existingFiles.find(f => f.path === "styles.css");
-      if (cssFile) cssVars = cssFile.content.slice(0, 500);
-    }
-
-    const systemPrompt = getPhaseSystemPrompt(currentPhase, cssVars || undefined);
-
-    const toolsDef = [{
-      type: "function",
-      function: {
-        name: "generate_website",
-        description: `Generate EXACTLY ${currentPhase.files.length} files for Phase ${phaseNum}: ${currentPhase.files.join(", ")}. Each .tsx 200+ lines.`,
-        parameters: {
-          type: "object",
-          properties: {
-            thought_process: { type: "array", items: { type: "string" }, description: "3-4 thinking steps in Arabic" },
-            vfs_operations: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  path: { type: "string" },
-                  action: { type: "string", enum: ["create", "update"] },
-                  content: { type: "string", description: "Full code, 200+ lines for .tsx" },
-                  language: { type: "string", enum: ["tsx", "css", "html"] },
-                },
-                required: ["path", "action", "content", "language"],
-              },
-              description: `EXACTLY ${currentPhase.files.length} files: ${currentPhase.files.join(", ")}`,
-            },
-            user_message: { type: "string", description: "Short Arabic status message" },
-          },
-          required: ["thought_process", "vfs_operations", "user_message"],
-        },
-      },
-    }];
-
-    // Build user message with context
-    let userContent = job.build_prompt;
-    if (existingFiles.length > 0) {
-      const ctx = existingFiles.map(f => `--- ${f.path} ---\n${f.content.slice(0, 800)}`).join("\n\n");
-      userContent += "\n\n## EXISTING FILES (from previous phases):\n" + ctx;
-    }
-
-    const messages = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userContent },
-    ];
 
     // API keys
     const geminiKeys = [
@@ -367,57 +174,97 @@ serve(async (req) => {
     ].filter(Boolean) as string[];
     const lovableKey = Deno.env.get("LOVABLE_API_KEY");
 
-    const result = await callAIForPhase(messages, toolsDef, geminiKeys, groqKeys, lovableKey);
+    // Template files are stored in the job's dependency_graph.templateFiles
+    const templateFiles = (job.dependency_graph as any)?.templateFiles || [];
+    const modifications = (job.dependency_graph as any)?.modifications || {};
 
-    // ─── Performance Monitoring ───
-    const phaseTime = Date.now() - phaseStartTime;
-    console.log(`[perf] Phase ${phaseNum} completed in ${phaseTime}ms (${(phaseTime / 1000).toFixed(1)}s)`);
-    if (phaseTime > 60000) {
-      console.warn(`⚠️ Phase ${phaseNum} took ${(phaseTime / 1000).toFixed(1)}s — exceeds 60s target`);
-    }
-
-    if (!result || !result.vfs_operations?.length) {
-      console.error(`[worker] Phase ${phaseNum} failed after ${(phaseTime / 1000).toFixed(1)}s`);
-      await supabase.from("build_jobs").update({
-        status: `failed_phase_${phaseNum}`,
-      }).eq("id", job_id);
-      return new Response(JSON.stringify({ status: "failed", phase: phaseNum, timeMs: phaseTime }), {
+    if (!templateFiles.length) {
+      console.error("[worker] No template files in job");
+      await supabase.from("build_jobs").update({ status: "failed_no_template" }).eq("id", job_id);
+      return new Response(JSON.stringify({ status: "failed", reason: "no template files" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Save phase files to DB
-    const phaseFiles = result.vfs_operations.map((op: any) => ({
+    console.log(`[worker] Template customization: ${templateFiles.length} files`);
+
+    // Build AI prompt
+    const templateContext = templateFiles
+      .map((f: any) => `--- ${f.path || f.name} ---\n${f.content}`)
+      .join("\n\n");
+
+    const modStr = JSON.stringify(modifications, null, 2);
+
+    const toolsDef = [{
+      type: "function",
+      function: {
+        name: "generate_website",
+        description: "Output the customized template files.",
+        parameters: {
+          type: "object",
+          properties: {
+            thought_process: { type: "array", items: { type: "string" } },
+            vfs_operations: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  path: { type: "string" },
+                  action: { type: "string", enum: ["create", "update"] },
+                  content: { type: "string" },
+                  language: { type: "string", enum: ["tsx", "css", "html"] },
+                },
+                required: ["path", "action", "content", "language"],
+              },
+            },
+            user_message: { type: "string" },
+          },
+          required: ["vfs_operations", "user_message"],
+        },
+      },
+    }];
+
+    const messages = [
+      { role: "system", content: TEMPLATE_CUSTOMIZER_PROMPT },
+      {
+        role: "user",
+        content: [
+          `## BUILD PROMPT:\n${job.build_prompt}`,
+          `\n## MODIFICATIONS:\n${modStr}`,
+          `\n## TEMPLATE FILES:\n${templateContext}`,
+        ].join('\n'),
+      },
+    ];
+
+    const result = await callAI(messages, toolsDef, geminiKeys, groqKeys, lovableKey);
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[worker] Completed in ${(elapsed / 1000).toFixed(1)}s`);
+
+    if (!result || !result.vfs_operations?.length) {
+      console.error(`[worker] Failed after ${(elapsed / 1000).toFixed(1)}s`);
+      await supabase.from("build_jobs").update({ status: "failed" }).eq("id", job_id);
+      return new Response(JSON.stringify({ status: "failed", timeMs: elapsed }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Save all files to phase_1 (single-pass, no multi-phase needed)
+    const allFiles = result.vfs_operations.map((op: any) => ({
       name: op.path?.split("/").pop() || op.path,
       content: op.content,
     }));
 
-    const isLastPhase = phaseNum >= 4;
-    const phaseKey = `phase_${phaseNum}_files`;
-
     await supabase.from("build_jobs").update({
-      [phaseKey]: phaseFiles,
-      current_phase: phaseNum,
-      status: isLastPhase ? "completed" : `building_phase_${phaseNum + 1}`,
-      ...(isLastPhase ? { completed_at: new Date().toISOString() } : {}),
+      phase_1_files: allFiles,
+      current_phase: 1,
+      status: "completed",
+      completed_at: new Date().toISOString(),
     }).eq("id", job_id);
 
-    console.log(`[worker] Phase ${phaseNum} done — ${phaseFiles.length} files saved in ${(phaseTime / 1000).toFixed(1)}s`);
+    console.log(`[worker] Done — ${allFiles.length} files saved in ${(elapsed / 1000).toFixed(1)}s`);
 
-    // Fire-and-forget: trigger next phase
-    if (!isLastPhase) {
-      const selfUrl = `${supabaseUrl}/functions/v1/barq-build-worker`;
-      fetch(selfUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceKey}`,
-        },
-        body: JSON.stringify({ job_id, phase_number: phaseNum + 1 }),
-      }).catch(err => console.error("[worker] Failed to trigger next phase:", err));
-    }
-
-    return new Response(JSON.stringify({ status: "ok", phase: phaseNum, files: phaseFiles.length }), {
+    return new Response(JSON.stringify({ status: "ok", files: allFiles.length, timeMs: elapsed }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 

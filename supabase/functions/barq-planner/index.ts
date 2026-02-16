@@ -9,38 +9,54 @@ const corsHeaders = {
 
 const DAILY_LIMIT = 50;
 
+const TEMPLATE_LIST = [
+  'restaurant-luxury — مطعم فاخر (قائمة طعام، حجوزات، معرض، آراء)',
+  'medical-clinic — عيادة طبية (خدمات، أطباء، مواعيد، تأمين)',
+  'real-estate-agency — شركة عقارات (عقارات، بحث، وكلاء، خدمات)',
+  'ecommerce-store — متجر إلكتروني (منتجات، فئات، عروض، سلة)',
+  'law-firm — مكتب محاماة (مجالات، محامين، قصص نجاح، استشارة)',
+  'beauty-salon — صالون تجميل (خدمات، معرض، حجز، عروض)',
+  'gym-fitness — نادي رياضي (باقات، حصص، مدربين، معرض)',
+  'tech-company — شركة برمجيات (خدمات، مشاريع، فريق، مدونة)',
+  'education-academy — أكاديمية تعليمية (دورات، مدرسين، شهادات، تسجيل)',
+  'photography-portfolio — مصور فوتوغرافي (معرض، خدمات، أسعار، حجز)',
+  'consulting-firm — شركة استشارات (خبرات، فريق، دراسات حالة، تواصل)',
+  'personal-portfolio — موقع شخصي (نبذة، مهارات، مشاريع، خبرات)',
+].join('\n');
+
 const PLANNER_SYSTEM_PROMPT = [
   'أنت "برق" ⚡ — مهندس حلول ذكاء اصطناعي خبير في Barq AI.',
   '',
   '## شخصيتك:',
   '- تتكلم باللهجة السعودية بشكل طبيعي ومحترف.',
-  '- دقيق، استراتيجي، وتفكر ببنية المكونات (Component-based architecture).',
+  '- دقيق، استراتيجي، وتفكر ببنية المكونات.',
   '- تستخدم إيموجي باعتدال ⚡🚀✨.',
   '',
   '## مهمتك:',
-  'تحليل طلبات المستخدم وتحويلها إلى خطة بناء تكرارية (iterative build plan) باستخدام بنية React الموديلية (shadcn/ui).',
+  'تحليل طلبات المستخدم واختيار أفضل قالب من القوالب الجاهزة وتحديد التعديلات المطلوبة.',
+  '',
+  '## القوالب المتاحة (12 قالب احترافي جاهز):',
+  TEMPLATE_LIST,
   '',
   '## ⛔ قواعد صارمة:',
-  '1. **التحليل أولاً**: قبل أي شيء، حلل الملفات الموجودة (vfs_context) لفهم البنية الحالية.',
-  '2. **التخطيط قبل التنفيذ**: لا تستدعي أداة prepare_build_prompt إلا بعد وضع خطة واضحة وموافقة المستخدم.',
-  '3. **مخطط الاعتماديات (Dependency Graph)**: يجب أن يكون الناتج الأساسي هو مخطط يوضح المكونات الجديدة والمكونات التي سيتم تعديلها.',
+  '1. **التحليل أولاً**: افهم ماذا يريد المستخدم بالضبط.',
+  '2. **اختيار القالب**: اختر أقرب قالب للطلب من القائمة أعلاه.',
+  '3. **التخطيط قبل التنفيذ**: لا تستدعي أداة customize_template إلا بعد وضع خطة واضحة وموافقة المستخدم.',
   '4. **لا ترد بأي كود أبداً**.',
   '',
   '## وضع البناء الجديد (vfs_context فارغ):',
   '1. افهم النشاط التجاري، الاسم، والتفاصيل.',
-  '2. اقترح بنية مكونات منطقية (e.g., Hero, Services, Testimonials, ContactForm).',
-  '3. لخّص الخطة واطلب التأكيد: "ببني لك 5 مكونات رئيسية مع ملف App.tsx يجمعهم. إذا تمام، قل **ابدأ** ⚡".',
+  '2. اختر أفضل قالب واقترح التعديلات.',
+  '3. لخّص الخطة واطلب التأكيد: "راح أستخدم قالب [اسم القالب] وأعدله لك بالتفاصيل اللي ذكرتها. إذا تمام، قل **ابدأ** ⚡".',
   '',
   '## وضع التعديل (vfs_context موجود):',
-  '1. حلل الطلب: "أبغى أضيف قسم للأسئلة الشائعة".',
-  '2. قارن بالملفات الموجودة: هل يوجد مكون FAQ.tsx؟ هل App.tsx جاهز لاستيراده؟',
-  '3. ضع خطة تعديل: "تمام، راح أنشئ لك مكون FAQ.tsx جديد وأضيفه في App.tsx. موافق؟".',
-  '4. عند استدعاء الأداة، يجب أن يكون dependency_graph دقيقاً جداً.',
+  '1. حلل الطلب وقارن بالملفات الموجودة.',
+  '2. ضع خطة تعديل مختصرة.',
+  '3. عند الموافقة، استدع customize_template مع التعديلات.',
   '',
   '## متى تستدعي الأداة:',
   '- فقط عندما يقول المستخدم كلمة صريحة: "ابدأ"، "يلا"، "نفذ"، "عدّل".',
-  '- عند الاستدعاء: حوّل الخطة إلى برومبت إنجليزي تقني مفصل.',
-  '- **dependency_graph**: يجب أن يكون JSON يصف الملفات والإجراءات (create, update, delete) والعلاقات بينها.',
+  '- عند الاستدعاء: حدد template_id والتعديلات بدقة.',
 ].join('\n');
 
 function sseEvent(data: Record<string, unknown>): string {
@@ -83,7 +99,6 @@ async function authenticateUser(req: Request): Promise<{ userId: string } | Resp
   return { userId: user.id };
 }
 
-// Helper to try multiple API keys against an endpoint
 async function tryKeys(
   keys: string[],
   url: string,
@@ -144,24 +159,62 @@ serve(async (req) => {
       {
         type: "function",
         function: {
-          name: "prepare_build_prompt",
-          description: "استخدم هذه الأداة فقط بعد وضع خطة بناء واضحة وموافقة المستخدم.",
+          name: "customize_template",
+          description: "اختر أفضل قالب وحدد التعديلات المطلوبة. استخدم هذه الأداة فقط بعد موافقة المستخدم.",
           parameters: {
             type: "object",
             properties: {
-              build_prompt: { type: "string", description: "A detailed English technical prompt for the builder." },
-              summary_ar: { type: "string", description: "ملخص عربي مختصر للمستخدم يوضح الخطة التكرارية." },
-              project_name: { type: "string", description: "اسم المشروع أو الشركة." },
-              dependency_graph: {
+              template_id: {
+                type: "string",
+                description: "معرف القالب المختار",
+                enum: [
+                  "restaurant-luxury", "medical-clinic", "real-estate-agency",
+                  "ecommerce-store", "law-firm", "beauty-salon",
+                  "gym-fitness", "tech-company", "education-academy",
+                  "photography-portfolio", "consulting-firm", "personal-portfolio"
+                ]
+              },
+              modifications: {
                 type: "object",
-                description: "A JSON object representing the dependency graph of file operations.",
+                description: "التعديلات المطلوبة على القالب",
                 properties: {
-                  nodes: { type: "array", items: { type: "object" } },
-                  edges: { type: "array", items: { type: "object" } }
-                }
-              }
+                  brandName: { type: "string", description: "اسم العلامة التجارية أو المشروع" },
+                  colors: {
+                    type: "object",
+                    properties: {
+                      primary: { type: "string" },
+                      secondary: { type: "string" },
+                      accent: { type: "string" }
+                    }
+                  },
+                  content: {
+                    type: "object",
+                    description: "المحتوى المخصص (عناوين، أوصاف، خدمات)"
+                  },
+                  contact: {
+                    type: "object",
+                    properties: {
+                      phone: { type: "string" },
+                      email: { type: "string" },
+                      address: { type: "string" }
+                    }
+                  },
+                  sections: {
+                    type: "object",
+                    properties: {
+                      order: { type: "array", items: { type: "string" } },
+                      remove: { type: "array", items: { type: "string" } },
+                      add: { type: "array", items: { type: "string" } }
+                    }
+                  }
+                },
+                required: ["brandName"]
+              },
+              summary_ar: { type: "string", description: "ملخص عربي مختصر للمستخدم" },
+              project_name: { type: "string", description: "اسم المشروع" },
+              build_prompt: { type: "string", description: "Detailed English technical prompt describing ALL customizations to apply to the template. Include brand name, colors, content changes, contact info, and any section modifications." }
             },
-            required: ["build_prompt", "summary_ar", "project_name", "dependency_graph"],
+            required: ["template_id", "modifications", "summary_ar", "project_name", "build_prompt"],
           },
         },
       },
@@ -272,7 +325,10 @@ serve(async (req) => {
                   prompt: toolCallData.build_prompt,
                   summary: toolCallData.summary_ar,
                   projectName: toolCallData.project_name,
-                  dependencyGraph: toolCallData.dependency_graph,
+                  templateId: toolCallData.template_id,
+                  modifications: toolCallData.modifications,
+                  // Keep dependency graph for backward compat
+                  dependencyGraph: { templateId: toolCallData.template_id },
                 })
               )
             );
