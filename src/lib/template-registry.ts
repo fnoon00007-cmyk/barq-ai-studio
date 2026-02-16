@@ -26,7 +26,8 @@ export interface TemplateModifications {
 // Registry of template IDs that have full pre-built code
 const FULL_TEMPLATE_IDS = new Set<string>([
   "restaurant-luxury",
-  // More templates will be added here as they're built
+  "medical-clinic",
+  "ecommerce-store",
 ]);
 
 /** Check if a template has full pre-built code available */
@@ -40,6 +41,14 @@ export async function loadTemplateFiles(templateId: string): Promise<VFSFile[]> 
     case "restaurant-luxury": {
       const mod = await import("@/templates/restaurant-premium");
       return mod.RESTAURANT_TEMPLATE_FILES;
+    }
+    case "medical-clinic": {
+      const mod = await import("@/templates/medical-clinic");
+      return mod.MEDICAL_CLINIC_TEMPLATE_FILES;
+    }
+    case "ecommerce-store": {
+      const mod = await import("@/templates/ecommerce-store");
+      return mod.ECOMMERCE_STORE_TEMPLATE_FILES;
     }
     default:
       return [];
