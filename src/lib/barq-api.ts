@@ -14,13 +14,13 @@ export interface StreamCallbacks {
   onFileChunk?: (path: string, chunk: string) => void;
   onFileDone?: (path: string, content: string) => void;
   onMessageDelta?: (text: string) => void;
-  onBuildReady?: (buildPrompt: string, summary: string, projectName: string, dependencyGraph: any) => void;
+  onBuildReady?: (buildPrompt: string, summary: string, projectName: string, dependencyGraph: any, templateId?: string, modifications?: any) => void;
   onFixReady?: (operations: VFSOperation[], summary: string) => void;
   onDone?: () => void;
   onError?: (error: string) => void;
 }
 
-const STREAM_TIMEOUT_MS = 60_000; // Increased from 45s to 60s
+const STREAM_TIMEOUT_MS = 60_000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2_000;
 
@@ -105,7 +105,14 @@ async function processSSEStream(
               callbacks.onMessageDelta?.(parsed.content);
               break;
             case "build_ready":
-              callbacks.onBuildReady?.(parsed.prompt || parsed.build_prompt, parsed.summary, parsed.projectName || parsed.project_name, parsed.dependencyGraph);
+              callbacks.onBuildReady?.(
+                parsed.prompt || parsed.build_prompt,
+                parsed.summary,
+                parsed.projectName || parsed.project_name,
+                parsed.dependencyGraph,
+                parsed.templateId || parsed.template_id,
+                parsed.modifications
+              );
               break;
             case "fix_ready":
               callbacks.onFixReady?.(parsed.operations, parsed.summary);
@@ -131,7 +138,7 @@ async function processSSEStream(
         try {
           const parsed = JSON.parse(jsonStr);
           if (parsed.event === "message_delta") callbacks.onMessageDelta?.(parsed.content);
-          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.prompt || parsed.build_prompt, parsed.summary, parsed.projectName || parsed.project_name, parsed.dependencyGraph);
+          if (parsed.event === "build_ready") callbacks.onBuildReady?.(parsed.prompt || parsed.build_prompt, parsed.summary, parsed.projectName || parsed.project_name, parsed.dependencyGraph, parsed.templateId, parsed.modifications);
           if (parsed.event === "done") {
             callbacks.onDone?.();
             return;
@@ -160,9 +167,8 @@ async function fetchWithRetry(
     try {
       const resp = await fetch(url, options);
       
-      // Retry on 429 (rate limit) or 502/503/504 (server errors)
       if ((resp.status === 429 || resp.status >= 502) && attempt < retries) {
-        const delay = RETRY_DELAY_MS * (attempt + 1); // Progressive backoff
+        const delay = RETRY_DELAY_MS * (attempt + 1);
         console.warn(`[barq-api] HTTP ${resp.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
         await new Promise(r => setTimeout(r, delay));
         continue;
@@ -209,44 +215,57 @@ export async function streamBarqPlanner(
   await processSSEStream(resp, callbacks, signal);
 }
 
-/** Stream build execution with Groq builder — supports phased builds */
-export async function streamBarqBuilder(
-  payload: { buildPrompt: string; projectId: string | null; dependencyGraph: any; existingFiles: { path: string; content: string }[]; phase?: number },
+/** Stream template customization with barq-chat */
+export async function streamBarqTemplateCustomize(
+  payload: {
+    buildPrompt: string;
+    templateFiles: { path: string; content: string }[];
+    modifications?: any;
+    projectId: string | null;
+  },
   callbacks: StreamCallbacks,
   signal?: AbortSignal
 ): Promise<void> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
   const headers = await getAuthHeaders();
 
-  const body: any = {
-    build_prompt: payload.buildPrompt,
-    projectId: payload.projectId,
-    dependencyGraph: payload.dependencyGraph,
-    existing_files: payload.existingFiles,
-  };
-
-  // Add phase number if specified (for phased builds)
-  if (payload.phase) {
-    body.phase = payload.phase;
-  }
-
   const resp = await fetchWithRetry(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      build_prompt: payload.buildPrompt,
+      template_files: payload.templateFiles,
+      modifications: payload.modifications,
+      projectId: payload.projectId,
+    }),
     signal,
   });
 
   await processSSEStream(resp, callbacks, signal);
 }
 
-/** Build phases definition for UI progress */
-export const BUILD_PHASES = [
-  { id: 1, label: "الأساس", files: ["styles.css", "App.tsx", "Header.tsx"] },
-  { id: 2, label: "المحتوى الرئيسي", files: ["Hero.tsx", "Services.tsx", "About.tsx"] },
-  { id: 3, label: "التفاعل", files: ["Stats.tsx", "Testimonials.tsx", "CTA.tsx"] },
-  { id: 4, label: "الإغلاق", files: ["Contact.tsx", "Footer.tsx"] },
-];
+/** Stream modification of existing files with barq-chat */
+export async function streamBarqBuilder(
+  payload: { buildPrompt: string; projectId: string | null; dependencyGraph: any; existingFiles: { path: string; content: string }[] },
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/barq-chat`;
+  const headers = await getAuthHeaders();
+
+  const resp = await fetchWithRetry(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      build_prompt: payload.buildPrompt,
+      existing_files: payload.existingFiles,
+      projectId: payload.projectId,
+    }),
+    signal,
+  });
+
+  await processSSEStream(resp, callbacks, signal);
+}
 
 /** Review generated files with Gemini reviewer */
 export interface ReviewResult {
@@ -280,7 +299,6 @@ export async function githubExportAction(
 ): Promise<any> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/github-export`;
   
-  // Some actions don't require auth (get_auth_url, exchange_code)
   let headers: Record<string, string>;
   const noAuthActions = ["get_auth_url", "exchange_code"];
   if (noAuthActions.includes(action)) {
@@ -306,15 +324,6 @@ export async function githubExportAction(
   }
 
   return resp.json();
-}
-
-/** @deprecated Use streamBarqPlanner + streamBarqBuilder instead */
-export async function streamBarqAI(
-  messages: { role: string; content: string }[],
-  callbacks: StreamCallbacks,
-  signal?: AbortSignal
-): Promise<void> {
-  return streamBarqPlanner({ conversationHistory: messages, projectId: null, vfsContext: [] }, callbacks, signal);
 }
 
 /** Stream fix suggestions from Gemini fixer */
@@ -346,3 +355,19 @@ export async function streamBarqFixer(
     onMessageDelta: callbacks.onMessageDelta,
   }, signal);
 }
+
+/** @deprecated Use streamBarqPlanner + streamBarqTemplateCustomize instead */
+export async function streamBarqAI(
+  messages: { role: string; content: string }[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  return streamBarqPlanner({ conversationHistory: messages, projectId: null, vfsContext: [] }, callbacks, signal);
+}
+
+/** Build phases definition for UI progress (kept for backward compat) */
+export const BUILD_PHASES = [
+  { id: 1, label: "تحميل القالب", files: ["template"] },
+  { id: 2, label: "التخصيص", files: ["customization"] },
+  { id: 3, label: "المراجعة", files: ["review"] },
+];
