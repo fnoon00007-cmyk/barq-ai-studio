@@ -134,6 +134,12 @@ export function useBuildEngine({
   const connectedJobIdRef = useRef<string | null>(null);
   const MAX_FIX_ATTEMPTS = 2;
 
+  // Ref to always hold the latest applyVFSOperations (avoids stale closures in realtime callbacks)
+  const applyVFSOperationsRef = useRef(applyVFSOperations);
+  useEffect(() => { applyVFSOperationsRef.current = applyVFSOperations; }, [applyVFSOperations]);
+  const saveProjectRef = useRef(saveProject);
+  useEffect(() => { saveProjectRef.current = saveProject; }, [saveProject]);
+
   // --- Cleanup realtime on unmount ---
   useEffect(() => {
     return () => {
@@ -221,14 +227,14 @@ export function useBuildEngine({
           const allFiles = extractFilesFromJob(jobData);
           console.log("[realtime] Build completed, extracted", allFiles.length, "files");
           
-          // Apply all files to VFS
+          // Apply all files to VFS (use ref to avoid stale closure)
           if (allFiles.length > 0) {
             const ops: VFSOperation[] = allFiles.map((f: any) => ({
               path: f.name || f.path,
               content: f.content,
               action: "create" as const,
             }));
-            await applyVFSOperations(ops, "بناء سيرفري مكتمل");
+            await applyVFSOperationsRef.current(ops, "بناء سيرفري مكتمل");
           }
 
           dispatch({ type: "SET_PHASE_PROGRESS", payload: null });
@@ -236,7 +242,7 @@ export function useBuildEngine({
           connectedJobIdRef.current = null;
           updateMessage(assistantMsgId, { content: "اكتمل البناء! ✅", isStreaming: false, pipelineStage: "done" });
           await saveMessage({ role: "assistant", content: "اكتمل البناء!" });
-          await saveProject();
+          await saveProjectRef.current();
           toast.success("✅ اكتمل البناء السيرفري بنجاح!");
 
           // Browser Notification (works even in background tabs)
@@ -286,7 +292,7 @@ export function useBuildEngine({
 
     realtimeChannelRef.current = channel;
     return channel;
-  }, [applyVFSOperations, addMessage, updateMessage, saveMessage, saveProject]);
+  }, [addMessage, updateMessage, saveMessage]);
 
   // --- Check for active/completed server-side builds on mount AND on tab focus ---
   const appliedJobIdsRef = useRef<Set<string>>(new Set());
@@ -389,8 +395,8 @@ export function useBuildEngine({
                 content: f.content,
                 action: "create" as const,
               }));
-              await applyVFSOperations(ops, "بناء سيرفري مكتمل — مزامنة تلقائية");
-              await saveProject();
+              await applyVFSOperationsRef.current(ops, "بناء سيرفري مكتمل — مزامنة تلقائية");
+              await saveProjectRef.current();
               toast.success("✅ تم تطبيق البناء المكتمل تلقائياً!");
 
               const assistantMsgId = crypto.randomUUID();
